@@ -1,0 +1,46 @@
+name: Delete Items
+
+on:
+  workflow_dispatch:
+    inputs:
+      delete_ids:
+        description: 'Comma-separated item IDs to delete'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run delete script
+        env:
+          DELETE_IDS: ${{ github.event.inputs.delete_ids }}
+        run: python delete_items.py
+
+      - name: Commit and push
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add data/metadata.json data/blocklist.json
+          git add -u
+          if git diff --staged --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "delete: items removed via gallery"
+            git push
+          fi

@@ -36,6 +36,15 @@ header{
 .tab-btn:hover{border-color:var(--accent);color:var(--text);}
 .tab-btn.on{background:var(--accent);border-color:var(--accent);color:#fff;}
 #count{font-size:.74rem;color:var(--muted);margin-left:auto;}
+.apply-btn{
+  padding:5px 14px;border-radius:16px;border:1px solid var(--border);
+  background:transparent;color:var(--muted);font-size:.76rem;cursor:pointer;
+  transition:all .2s;white-space:nowrap;
+}
+.apply-btn:hover{color:var(--text);border-color:#888;}
+.apply-btn.has-pending{color:var(--accent);border-color:var(--accent);}
+.apply-btn:disabled{opacity:.5;cursor:not-allowed;}
+.pending-cnt{color:var(--accent);font-weight:700;}
 .gear-btn{
   padding:5px 12px;border-radius:16px;border:1px solid var(--border);
   background:transparent;color:var(--muted);font-size:.76rem;cursor:pointer;
@@ -54,7 +63,7 @@ header{
 .card{
   break-inside:avoid;margin-bottom:6px;border-radius:10px;overflow:hidden;
   position:relative;background:var(--surface);cursor:pointer;
-  transition:transform .2s,box-shadow .2s;
+  transition:transform .2s,box-shadow .2s,opacity .3s;
 }
 .card:hover{transform:scale(1.014);box-shadow:0 4px 20px rgba(0,0,0,.5);z-index:2;}
 .card-img{
@@ -106,7 +115,6 @@ header{
 }
 .del-btn:hover{background:var(--danger);border-color:var(--danger);color:#fff;}
 .card:hover .del-btn{opacity:1;}
-.del-btn.deleting{opacity:1;background:var(--danger);}
 
 /* ── Loader ── */
 .loader{display:flex;align-items:center;justify-content:center;
@@ -120,10 +128,11 @@ header{
   display:flex;align-items:center;justify-content:center;z-index:500;padding:20px;}
 .modal-bg.hidden{display:none;}
 .modal{background:#1b1b1b;border:1px solid var(--border);
-  border-radius:14px;padding:26px;max-width:420px;width:100%;}
+  border-radius:14px;padding:26px;max-width:440px;width:100%;}
 .modal h2{font-size:.95rem;margin-bottom:8px;}
 .modal p{font-size:.78rem;color:var(--muted);margin-bottom:14px;line-height:1.6;}
 .modal a{color:var(--accent);}
+.modal small{font-size:.7rem;color:#555;display:block;margin-top:4px;}
 .modal input{width:100%;padding:8px 11px;border-radius:7px;
   border:1px solid var(--border);background:#0f0f0f;color:var(--text);
   font-size:.82rem;margin-bottom:12px;outline:none;}
@@ -157,23 +166,24 @@ header{
     <button class="tab-btn"     onclick="setFilter('video',this)">Videos</button>
   </div>
   <span id="count"></span>
-  <button class="gear-btn" onclick="openModal()">⚙ 삭제 설정</button>
+  <button class="apply-btn" id="apply-btn" onclick="applyDeletes()">⏫ GitHub 반영</button>
+  <button class="gear-btn" onclick="openModal()">⚙ 설정</button>
 </header>
 
 <div id="root"><div class="loader"><div class="spinner"></div><span>불러오는 중…</span></div></div>
 
-<!-- PAT 설정 모달 -->
+<!-- 설정 모달 -->
 <div class="modal-bg hidden" id="modal">
   <div class="modal">
-    <h2>🔑 GitHub 토큰 설정</h2>
+    <h2>⚙ 삭제 설정</h2>
     <p>
-      썸네일 <b>✕ 삭제</b> 기능에는 GitHub Personal Access Token이 필요합니다.<br>
-      <a href="https://github.com/settings/tokens/new?scopes=repo&description=MJ+Gallery" target="_blank">
-        → 토큰 발급 페이지 (repo 권한 체크 후 생성)
-      </a><br><br>
-      토큰은 이 브라우저의 <b>localStorage</b>에만 저장됩니다.
+      ✕ 를 누르면 <b>즉시 화면에서 숨겨지고</b>, 상단 <b>"⏫ GitHub 반영"</b> 버튼을 클릭하면<br>
+      GitHub Actions가 실행되어 실제 파일이 삭제됩니다.<br><br>
+      토큰은 <b>Actions: Read and write</b> 권한만 있으면 됩니다.<br>
+      <a href="https://github.com/settings/personal-access-tokens/new" target="_blank">→ Fine-grained PAT 발급</a>
+      <small>Repository: <b>dicacros-gif/mclaude</b> &nbsp;→&nbsp; Permissions &nbsp;→&nbsp; Actions: Read and write</small>
     </p>
-    <input type="password" id="pat-input" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+    <input type="password" id="pat-input" placeholder="github_pat_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
     <div class="modal-row">
       <button class="btn-cancel" onclick="closeModal()">취소</button>
       <button class="btn-ok" onclick="savePat()">저장</button>
@@ -185,67 +195,104 @@ header{
 
 <script>
 /* ── 설정 ── */
-const OWNER  = 'dicacros-gif';
-const REPO   = 'mclaude';
-const GHAPI  = `https://api.github.com/repos/${OWNER}/${REPO}/contents`;
-const RAW    = `https://raw.githubusercontent.com/${OWNER}/${REPO}/main`;
-const SITE   = `https://${OWNER}.github.io/${REPO}`;
+const OWNER = 'dicacros-gif';
+const REPO  = 'mclaude';
+const RAW   = `https://raw.githubusercontent.com/${OWNER}/${REPO}/main`;
+const SITE  = `https://${OWNER}.github.io/${REPO}`;
+
+const LS_PAT   = 'mj_actions_pat';
+const LS_QUEUE = 'mj_delete_queue';
 
 /* ── 상태 ── */
 let ALL  = [];
 let FILT = 'all';
 
+/* ── 삭제 큐 ── */
+function getPat()   { return localStorage.getItem(LS_PAT) || ''; }
+function getQueue() {
+  try { return JSON.parse(localStorage.getItem(LS_QUEUE) || '[]'); }
+  catch { return []; }
+}
+function saveQueue(arr) { localStorage.setItem(LS_QUEUE, JSON.stringify(arr)); }
+function addToQueue(id) {
+  const q = getQueue();
+  if (!q.includes(id)) { q.push(id); saveQueue(q); }
+}
+
+function updateApplyBtn(loading) {
+  const btn = document.getElementById('apply-btn');
+  if (!btn) return;
+  if (loading) {
+    btn.innerHTML = '⏳ 처리 중…';
+    btn.disabled = true;
+    btn.classList.remove('has-pending');
+    return;
+  }
+  const n = getQueue().length;
+  btn.disabled = false;
+  if (n > 0) {
+    btn.innerHTML = `⏫ GitHub 반영<span class="pending-cnt"> (${n})</span>`;
+    btn.classList.add('has-pending');
+  } else {
+    btn.innerHTML = '⏫ GitHub 반영';
+    btn.classList.remove('has-pending');
+  }
+}
+
 /* ── Toast ── */
-function toast(msg, ms=2800){
-  const el=document.getElementById('toast');
-  el.textContent=msg; el.classList.add('show');
-  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),ms);
+function toast(msg, ms=2800) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('show'), ms);
 }
 
 /* ── Modal ── */
-function openModal(){
-  document.getElementById('pat-input').value=localStorage.getItem('gh_pat')||'';
+function openModal() {
+  document.getElementById('pat-input').value = getPat();
   document.getElementById('modal').classList.remove('hidden');
 }
-function closeModal(){document.getElementById('modal').classList.add('hidden');}
-function savePat(){
-  const v=document.getElementById('pat-input').value.trim();
-  if(!v){toast('토큰을 입력해 주세요');return;}
-  localStorage.setItem('gh_pat',v); closeModal(); toast('✅ 토큰 저장 완료');
+function closeModal() { document.getElementById('modal').classList.add('hidden'); }
+function savePat() {
+  const v = document.getElementById('pat-input').value.trim();
+  if (!v) { toast('토큰을 입력해 주세요'); return; }
+  localStorage.setItem(LS_PAT, v);
+  closeModal();
+  toast('✅ 토큰 저장 완료');
 }
 
-/* ── 메타데이터 로드 ── */
-async function loadMeta(){
-  const r=await fetch(`${RAW}/data/metadata.json?t=${Date.now()}`);
-  if(!r.ok) throw new Error(`metadata.json 로드 실패 (${r.status})`);
-  return r.json();
+/* ── 메타데이터 로드 (큐에 있는 항목 제외) ── */
+async function loadMeta() {
+  const r = await fetch(`${RAW}/data/metadata.json?t=${Date.now()}`);
+  if (!r.ok) throw new Error(`metadata.json 로드 실패 (${r.status})`);
+  const data = await r.json();
+  const queued = new Set(getQueue());
+  return data.filter(item => !queued.has(item.id));
 }
 
 /* ── 필터 ── */
-function setFilter(type,btn){
-  FILT=type;
-  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('on'));
+function setFilter(type, btn) {
+  FILT = type;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('on'));
   btn.classList.add('on');
   render();
 }
-function filtered(){return FILT==='all'?ALL:ALL.filter(i=>i.type===FILT);}
+function filtered() { return FILT === 'all' ? ALL : ALL.filter(i => i.type === FILT); }
 
 /* ── 카드 생성 ── */
-function esc(s){return (s||'').replace(/[<>"']/g,c=>({'<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-
-function thumbSrc(item){
-  // 저장된 파일 우선 → CDN URL 폴백
-  if(item.file_path) return `${SITE}/${item.file_path}`;
-  return item.url||'';
+function esc(s) {
+  return (s||'').replace(/[<>"']/g, c => ({'<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-
-function buildCard(item){
+function thumbSrc(item) {
+  if (item.file_path) return `${SITE}/${item.file_path}`;
+  return item.url || '';
+}
+function buildCard(item) {
   const src    = thumbSrc(item);
-  const prompt = esc(item.prompt||'').slice(0,200);
-  const user   = item.username?'@'+item.username:'';
-  const link   = esc(item.link||'#');
-  const isVid  = item.type==='video';
-  const badge  = isVid ? '▶ Video' : item.type==='style' ? '✦ Style' : '';
+  const prompt = esc(item.prompt || '').slice(0, 200);
+  const user   = item.username ? '@' + item.username : '';
+  const link   = esc(item.link || '#');
+  const isVid  = item.type === 'video';
+  const badge  = isVid ? '▶ Video' : item.type === 'style' ? '✦ Style' : '';
 
   return `<div class="card" id="c-${item.id}">
     <div onclick="window.open('${link}','_blank')">
@@ -254,124 +301,118 @@ function buildCard(item){
            alt="${prompt}"
            onerror="this.src='';this.style.minHeight='120px'">
     </div>
-    ${badge?`<span class="badge">${badge}</span>`:''}
-    ${isVid?'<div class="play-badge">▶</div>':''}
-    <button class="del-btn" title="삭제" onclick="confirmDel(event,'${item.id}')">✕</button>
+    ${badge ? `<span class="badge">${badge}</span>` : ''}
+    ${isVid ? '<div class="play-badge">▶</div>' : ''}
+    <button class="del-btn" title="삭제 예약" onclick="queueDel(event,'${item.id}')">✕</button>
     <div class="overlay" onclick="window.open('${link}','_blank')">
-      ${prompt?`<div class="ov-prompt">${prompt}</div>`:''}
-      ${user  ?`<div class="ov-user">${user}</div>`:''}
+      ${prompt ? `<div class="ov-prompt">${prompt}</div>` : ''}
+      ${user   ? `<div class="ov-user">${user}</div>` : ''}
     </div>
   </div>`;
 }
 
 /* ── 렌더 ── */
-function render(){
-  const items=filtered();
-  document.getElementById('count').textContent=`${items.length}개`;
-  const root=document.getElementById('root');
-  if(!items.length){
-    root.innerHTML='<div class="loader"><span>항목 없음</span></div>';
+function render() {
+  const items = filtered();
+  document.getElementById('count').textContent = `${items.length}개`;
+  const root = document.getElementById('root');
+  if (!items.length) {
+    root.innerHTML = '<div class="loader"><span>항목 없음</span></div>';
     return;
   }
-  root.innerHTML=`<div class="grid">${items.map(buildCard).join('')}</div>`;
+  root.innerHTML = `<div class="grid">${items.map(buildCard).join('')}</div>`;
 
-  // Lazy load
-  const io=new IntersectionObserver(entries=>{
-    entries.forEach(e=>{
-      if(e.isIntersecting){
-        const img=e.target;
-        img.src=img.dataset.src;
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        const img = e.target;
+        img.src = img.dataset.src;
         img.classList.remove('lazy');
-        img.onload=()=>img.classList.add('loaded');
+        img.onload = () => img.classList.add('loaded');
         io.unobserve(img);
       }
     });
-  },{rootMargin:'400px'});
-  root.querySelectorAll('img.lazy').forEach(img=>io.observe(img));
+  }, { rootMargin: '400px' });
+  root.querySelectorAll('img.lazy').forEach(img => io.observe(img));
 }
 
-/* ── GitHub API ── */
-function pat(){return localStorage.getItem('gh_pat')||'';}
-function ghH(){return{Authorization:`token ${pat()}`,Accept:'application/vnd.github.v3+json','Content-Type':'application/json'};}
-
-async function ghGet(path){
-  const r=await fetch(`${GHAPI}/${path}`,{headers:ghH()});
-  if(!r.ok) throw new Error(`GET ${path} → ${r.status}`);
-  return r.json();
-}
-async function ghDel(path,sha,msg){
-  const r=await fetch(`${GHAPI}/${path}`,{method:'DELETE',headers:ghH(),
-    body:JSON.stringify({message:msg,sha})});
-  if(!r.ok){const t=await r.text();throw new Error(`DELETE ${path} → ${r.status}: ${t}`);}
-}
-async function ghPut(path,sha,content,msg){
-  const r=await fetch(`${GHAPI}/${path}`,{method:'PUT',headers:ghH(),
-    body:JSON.stringify({message:msg,
-      content:btoa(unescape(encodeURIComponent(content))),sha})});
-  if(!r.ok){const t=await r.text();throw new Error(`PUT ${path} → ${r.status}: ${t}`);}
-}
-
-/* ── 삭제 ── */
-function confirmDel(e,id){
+/* ── X 버튼: 큐에 추가, 즉시 숨김 ── */
+function queueDel(e, id) {
   e.stopPropagation();
-  if(!pat()){toast('⚠️ 삭제하려면 먼저 GitHub 토큰을 설정해 주세요.');openModal();return;}
-  if(!confirm('이 썸네일을 삭제할까요?\n(갤러리 + GitHub 파일에서 모두 삭제됩니다)'))return;
-  doDelete(id);
+  const card = document.getElementById(`c-${id}`);
+  if (card) {
+    card.style.opacity = '0';
+    card.style.pointerEvents = 'none';
+    setTimeout(() => card.remove(), 300);
+  }
+  ALL = ALL.filter(i => i.id !== id);
+  document.getElementById('count').textContent = `${filtered().length}개`;
+  addToQueue(id);
+  updateApplyBtn();
+  toast('🗑 삭제 예약됨 · 상단 "GitHub 반영" 버튼으로 적용');
 }
 
-async function doDelete(id){
-  const item=ALL.find(i=>i.id===id);
-  if(!item)return;
+/* ── GitHub Actions workflow_dispatch 실행 ── */
+async function applyDeletes() {
+  const q = getQueue();
+  if (!q.length) { toast('삭제 대기 목록이 없습니다'); return; }
 
-  // 즉시 UI 처리
-  const card=document.getElementById(`c-${id}`);
-  const btn=card?.querySelector('.del-btn');
-  if(card){card.style.opacity='.3';card.style.pointerEvents='none';}
-  if(btn) btn.classList.add('deleting');
-  toast('⏳ 삭제 중…',10000);
+  const p = getPat();
+  if (!p) {
+    toast('⚠️ 먼저 설정에서 GitHub 토큰을 입력해 주세요');
+    openModal();
+    return;
+  }
 
-  try{
-    // 1) 썸네일 파일 삭제
-    if(item.file_path){
-      try{
-        const info=await ghGet(item.file_path);
-        await ghDel(item.file_path,info.sha,`delete: thumbnail ${id}`);
-      }catch(e){console.warn('파일 삭제 스킵:',e.message);}
+  updateApplyBtn(true);
+  toast('⏳ GitHub Actions 실행 요청 중…', 10000);
+
+  try {
+    const r = await fetch(
+      `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/delete_items.yml/dispatches`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `token ${p}`,
+          'Accept': 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ref: 'main', inputs: { delete_ids: q.join(',') } })
+      }
+    );
+
+    if (r.status === 204) {
+      const cnt = q.length;
+      saveQueue([]);
+      updateApplyBtn();
+      toast(`✅ 완료 · ${cnt}개 삭제 처리 중 (약 1~2분 소요)`, 5000);
+    } else if (r.status === 401) {
+      throw new Error('토큰이 유효하지 않습니다. ⚙ 설정에서 다시 입력해 주세요.');
+    } else if (r.status === 403) {
+      throw new Error('Actions 권한이 없습니다. PAT에 Actions: Read and write 권한을 추가하세요.');
+    } else if (r.status === 422) {
+      throw new Error('워크플로우를 찾을 수 없습니다. GitHub에 push 후 다시 시도하세요.');
+    } else {
+      const t = await r.text().catch(() => '');
+      throw new Error(`HTTP ${r.status}${t ? ': ' + t.slice(0, 120) : ''}`);
     }
-
-    // 2) metadata.json 업데이트
-    const metaInfo=await ghGet('data/metadata.json');
-    const raw=atob(metaInfo.content.replace(/\n/g,''));
-    const updated=JSON.parse(decodeURIComponent(escape(raw))).filter(i=>i.id!==id);
-    await ghPut('data/metadata.json',metaInfo.sha,
-                JSON.stringify(updated,null,2),`delete: remove ${id}`);
-
-    // 3) 로컬 갱신
-    ALL=ALL.filter(i=>i.id!==id);
-    card?.remove();
-    document.getElementById('count').textContent=`${filtered().length}개`;
-    document.getElementById('updated').textContent=
-      `최근 갱신: ${ALL[0]?.crawled_at?.slice(0,10)||'—'} · 총 ${ALL.length}개`;
-    toast('✅ 삭제 완료');
-
-  }catch(err){
-    console.error(err);
-    if(card){card.style.opacity='1';card.style.pointerEvents='';}
-    if(btn) btn.classList.remove('deleting');
-    toast('❌ 삭제 실패: '+err.message,6000);
+  } catch(err) {
+    updateApplyBtn();
+    toast(`❌ 실패: ${err.message}`, 8000);
   }
 }
 
 /* ── 초기화 ── */
-(async()=>{
-  try{
-    ALL=await loadMeta();
-    const latest=ALL[0]?.crawled_at?.slice(0,10)||'—';
-    document.getElementById('updated').textContent=
+(async () => {
+  try {
+    updateApplyBtn();
+    ALL = await loadMeta();
+    const latest = ALL[0]?.crawled_at?.slice(0, 10) || '—';
+    document.getElementById('updated').textContent =
       `최근 갱신: ${latest} · 총 ${ALL.length}개`;
     render();
-  }catch(err){
-    document.getElementById('root').innerHTML=
+  } catch(err) {
+    document.getElementById('root').innerHTML =
       `<div class="loader"><span style="color:var(--danger)">로드 실패: ${err.message}</span></div>`;
   }
 })();

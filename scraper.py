@@ -21,9 +21,10 @@ TABS = [
     {"name": "videos", "url": "https://www.midjourney.com/explore?tab=video_top",  "type": "video"},
 ]
 
-DATA_DIR  = Path("data")
-MEDIA_DIR = Path("media")
-META_FILE = DATA_DIR / "metadata.json"
+DATA_DIR   = Path("data")
+MEDIA_DIR  = Path("media")
+META_FILE  = DATA_DIR / "metadata.json"
+BLOCK_FILE = DATA_DIR / "blocklist.json"
 
 MAX_PER_TAB   = 50
 SCROLL_COUNT  = 22
@@ -52,6 +53,12 @@ def load_meta():
         try: return json.loads(META_FILE.read_text("utf-8"))
         except: return []
     return []
+
+def load_blocklist():
+    if BLOCK_FILE.exists():
+        try: return set(json.loads(BLOCK_FILE.read_text("utf-8")))
+        except: return set()
+    return set()
 
 def save_meta(items):
     DATA_DIR.mkdir(exist_ok=True)
@@ -289,8 +296,9 @@ def main() -> int:
 
     today    = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     existing = load_meta()
-    ex_ids   = {it["id"] for it in existing}
-    log(f"Existing: {len(existing)}\n")
+    blocked  = load_blocklist()
+    ex_ids   = {it["id"] for it in existing} | blocked
+    log(f"Existing: {len(existing)}, Blocked: {len(blocked)}\n")
 
     all_new = []
 
