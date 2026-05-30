@@ -259,7 +259,9 @@ def scrape_tab(ctx: BrowserContext, tab: dict, existing_ids: set, today: str) ->
 # ── 메인 ──────────────────────────────────────────────────────────────────────
 
 def parse_cookies(raw: str) -> list:
-    """'name=value; name2=value2' 쿠키 문자열 → Playwright 쿠키 목록"""
+    """'name=value; name2=value2' 쿠키 문자열 → Playwright 쿠키 목록.
+    __Host- 접두사 쿠키는 Domain 속성 금지(host-only, Secure, Path=/)이므로
+    url 방식으로 등록하고, 나머지는 .midjourney.com 도메인 쿠키로 등록한다."""
     cookies = []
     for part in raw.split(";"):
         part = part.strip()
@@ -267,11 +269,18 @@ def parse_cookies(raw: str) -> list:
             continue
         name, _, value = part.partition("=")
         name, value = name.strip(), value.strip()
-        if name:
-            cookies.append({
-                "name": name, "value": value,
-                "domain": ".midjourney.com", "path": "/",
-            })
+        if not name:
+            continue
+        if name.startswith("__Host-"):
+            # Domain 지정 불가 → url 로 등록 (host-only, https=secure, path=/)
+            cookies.append({"name": name, "value": value,
+                            "url": "https://www.midjourney.com/"})
+        else:
+            c = {"name": name, "value": value,
+                 "domain": ".midjourney.com", "path": "/"}
+            if name.startswith("__Secure-"):
+                c["secure"] = True
+            cookies.append(c)
     return cookies
 
 LAUNCH_ARGS = [
@@ -295,11 +304,24 @@ def apply_cookies(ctx):
         log("MJ_COOKIES not set")
         return
     cookies = parse_cookies(raw)
-    if cookies:
+    if not cookies:
+        log("MJ_COOKIES parsed to 0 cookies")
+        return
+    # 일괄 등록 시도 → 실패하면 개별 등록(이상한 쿠키 1개로 전체가 죽지 않게)
+    ok = 0
+    try:
         ctx.add_cookies(cookies)
-        names = ", ".join(sorted({c["name"] for c in cookies}))
-        log(f"Loaded {len(cookies)} cookies from MJ_COOKIES ({names})")
-        log(f"  UA: {'custom (MJ_UA)' if os.environ.get('MJ_UA') else 'default'}")
+        ok = len(cookies)
+    except Exception as exc:
+        log(f"add_cookies bulk failed ({exc}); adding individually...")
+        for c in cookies:
+            try:
+                ctx.add_cookies([c]); ok += 1
+            except Exception as e2:
+                log(f"  skip cookie {c['name']}: {e2}")
+    names = ", ".join(sorted({c["name"] for c in cookies}))
+    log(f"Loaded {ok}/{len(cookies)} cookies from MJ_COOKIES ({names})")
+    log(f"  UA: {'custom (MJ_UA)' if os.environ.get('MJ_UA') else 'default'}")
 
 def make_context(pw):
     headed      = os.environ.get("MJ_HEADED", "") == "1"
