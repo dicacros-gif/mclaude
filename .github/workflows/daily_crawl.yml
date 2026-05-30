@@ -1,9 +1,9 @@
-name: Daily Midjourney Crawl
+name: Midjourney Crawl (every 12h)
 
 on:
   schedule:
-    # 매일 UTC 02:00 (한국시간 11:00) 실행
-    - cron: "0 2 * * *"
+    # 12시간마다 실행 — UTC 00:00, 12:00 (한국시간 09:00, 21:00)
+    - cron: "0 */12 * * *"
   workflow_dispatch:
 
 permissions:

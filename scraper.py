@@ -327,7 +327,7 @@ def main() -> int:
         browser.close()
 
     if all_new:
-        merged = all_new + existing
+        merged = dedup(all_new + existing)   # id 기준 최종 중복 제거
         save_meta(merged)
         log(f"\nSaved +{len(all_new)} new  (total {len(merged)})")
     else:
