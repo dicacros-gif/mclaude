@@ -11,6 +11,11 @@ on:
 permissions:
   contents: write
 
+# 동시에 여러 삭제 요청이 와도 순차 실행 → git push 충돌 방지
+concurrency:
+  group: delete-items
+  cancel-in-progress: false
+
 jobs:
   delete:
     runs-on: ubuntu-latest

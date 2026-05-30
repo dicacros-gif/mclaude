@@ -21,12 +21,6 @@ header{
   border-bottom:1px solid var(--border);
   padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;
 }
-.logo{
-  font-size:1rem;font-weight:700;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-  white-space:nowrap;
-}
 .updated{font-size:.72rem;color:var(--muted);}
 .tabs{display:flex;gap:5px;flex-wrap:wrap;}
 .tab-btn{
@@ -36,15 +30,6 @@ header{
 .tab-btn:hover{border-color:var(--accent);color:var(--text);}
 .tab-btn.on{background:var(--accent);border-color:var(--accent);color:#fff;}
 #count{font-size:.74rem;color:var(--muted);margin-left:auto;}
-.apply-btn{
-  padding:5px 14px;border-radius:16px;border:1px solid var(--border);
-  background:transparent;color:var(--muted);font-size:.76rem;cursor:pointer;
-  transition:all .2s;white-space:nowrap;
-}
-.apply-btn:hover{color:var(--text);border-color:#888;}
-.apply-btn.has-pending{color:var(--accent);border-color:var(--accent);}
-.apply-btn:disabled{opacity:.5;cursor:not-allowed;}
-.pending-cnt{color:var(--accent);font-weight:700;}
 .gear-btn{
   padding:5px 12px;border-radius:16px;border:1px solid var(--border);
   background:transparent;color:var(--muted);font-size:.76rem;cursor:pointer;
@@ -157,7 +142,6 @@ header{
 
 <!-- Header -->
 <header>
-  <div class="logo">🎨 Midjourney Gallery</div>
   <div class="updated" id="updated">로드 중...</div>
   <div class="tabs">
     <button class="tab-btn on"  onclick="setFilter('all',this)">All</button>
@@ -166,7 +150,6 @@ header{
     <button class="tab-btn"     onclick="setFilter('video',this)">Videos</button>
   </div>
   <span id="count"></span>
-  <button class="apply-btn" id="apply-btn" onclick="applyDeletes()">⏫ GitHub 반영</button>
   <button class="gear-btn" onclick="openModal()">⚙ 설정</button>
 </header>
 
@@ -177,9 +160,9 @@ header{
   <div class="modal">
     <h2>⚙ 삭제 설정</h2>
     <p>
-      ✕ 를 누르면 <b>즉시 화면에서 숨겨지고</b>, 상단 <b>"⏫ GitHub 반영"</b> 버튼을 클릭하면<br>
-      GitHub Actions가 실행되어 실제 파일이 삭제됩니다.<br><br>
-      토큰은 <b>Actions: Read and write</b> 권한만 있으면 됩니다.<br>
+      ✕ 를 누르면 <b>즉시 화면에서 사라지고</b>, 자동으로 GitHub Actions가 실행되어<br>
+      메타데이터와 <b>저장된 이미지 파일</b>까지 삭제됩니다.<br><br>
+      이 토큰은 <b>Actions: Read and write</b> 권한만 있으면 됩니다.<br>
       <a href="https://github.com/settings/personal-access-tokens/new" target="_blank">→ Fine-grained PAT 발급</a>
       <small>Repository: <b>dicacros-gif/mclaude</b> &nbsp;→&nbsp; Permissions &nbsp;→&nbsp; Actions: Read and write</small>
     </p>
@@ -219,23 +202,59 @@ function addToQueue(id) {
   if (!q.includes(id)) { q.push(id); saveQueue(q); }
 }
 
-function updateApplyBtn(loading) {
-  const btn = document.getElementById('apply-btn');
-  if (!btn) return;
-  if (loading) {
-    btn.innerHTML = '⏳ 처리 중…';
-    btn.disabled = true;
-    btn.classList.remove('has-pending');
+/* ── 자동 반영 (디바운스) ── */
+let _applyTimer = null;
+let _applying   = false;
+
+function scheduleAutoApply() {
+  if (!getPat()) {                         // 토큰 없으면 설정 유도
+    toast('⚠️ 삭제하려면 ⚙ 설정에서 토큰을 입력하세요');
+    openModal();
     return;
   }
-  const n = getQueue().length;
-  btn.disabled = false;
-  if (n > 0) {
-    btn.innerHTML = `⏫ GitHub 반영<span class="pending-cnt"> (${n})</span>`;
-    btn.classList.add('has-pending');
-  } else {
-    btn.innerHTML = '⏫ GitHub 반영';
-    btn.classList.remove('has-pending');
+  clearTimeout(_applyTimer);
+  _applyTimer = setTimeout(dispatchDeletes, 3500);  // 연속 삭제를 한 번에 묶음 처리
+}
+
+async function dispatchDeletes() {
+  if (_applying) return;
+  const q = getQueue();
+  if (!q.length) return;
+  const p = getPat();
+  if (!p) { toast('⚠️ ⚙ 설정에서 토큰을 입력하세요'); openModal(); return; }
+
+  _applying = true;
+  toast('⏳ GitHub에 삭제 반영 중…', 8000);
+  try {
+    const r = await fetch(
+      `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/delete_items.yml/dispatches`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `token ${p}`,
+          'Accept': 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ref: 'main', inputs: { delete_ids: q.join(',') } })
+      }
+    );
+    if (r.status === 204) {
+      toast(`✅ ${q.length}개 삭제 요청됨 · 곧 파일까지 삭제됩니다`, 4000);
+      // 큐는 유지 → 다음 로드 때 metadata에서 사라지면 자동 정리(self-heal)
+    } else if (r.status === 401) {
+      throw new Error('토큰이 유효하지 않습니다 (⚙ 설정에서 재입력)');
+    } else if (r.status === 403) {
+      throw new Error('Actions 권한 없음 (PAT에 Actions: Read and write 추가)');
+    } else if (r.status === 422) {
+      throw new Error('워크플로우 없음 (GitHub push 후 재시도)');
+    } else {
+      const t = await r.text().catch(() => '');
+      throw new Error(`HTTP ${r.status}${t ? ': ' + t.slice(0, 100) : ''}`);
+    }
+  } catch(err) {
+    toast(`❌ 반영 실패: ${err.message}`, 8000);
+  } finally {
+    _applying = false;
   }
 }
 
@@ -258,15 +277,20 @@ function savePat() {
   localStorage.setItem(LS_PAT, v);
   closeModal();
   toast('✅ 토큰 저장 완료');
+  if (getQueue().length) dispatchDeletes();   // 예약돼 있던 삭제 자동 반영
 }
 
-/* ── 메타데이터 로드 (큐에 있는 항목 제외) ── */
+/* ── 메타데이터 로드 (삭제 예약 항목 숨김 + 큐 자동 정리) ── */
 async function loadMeta() {
   const r = await fetch(`${RAW}/data/metadata.json?t=${Date.now()}`);
   if (!r.ok) throw new Error(`metadata.json 로드 실패 (${r.status})`);
   const data = await r.json();
-  const queued = new Set(getQueue());
-  return data.filter(item => !queued.has(item.id));
+  const present = new Set(data.map(i => i.id));
+  // 서버에서 이미 삭제된 ID는 큐에서 제거(self-heal), 아직 남아있는 것만 숨김 유지
+  const stillPending = getQueue().filter(id => present.has(id));
+  saveQueue(stillPending);
+  const hide = new Set(stillPending);
+  return data.filter(item => !hide.has(item.id));
 }
 
 /* ── 필터 ── */
@@ -348,69 +372,19 @@ function queueDel(e, id) {
   ALL = ALL.filter(i => i.id !== id);
   document.getElementById('count').textContent = `${filtered().length}개`;
   addToQueue(id);
-  updateApplyBtn();
-  toast('🗑 삭제 예약됨 · 상단 "GitHub 반영" 버튼으로 적용');
-}
-
-/* ── GitHub Actions workflow_dispatch 실행 ── */
-async function applyDeletes() {
-  const q = getQueue();
-  if (!q.length) { toast('삭제 대기 목록이 없습니다'); return; }
-
-  const p = getPat();
-  if (!p) {
-    toast('⚠️ 먼저 설정에서 GitHub 토큰을 입력해 주세요');
-    openModal();
-    return;
-  }
-
-  updateApplyBtn(true);
-  toast('⏳ GitHub Actions 실행 요청 중…', 10000);
-
-  try {
-    const r = await fetch(
-      `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/delete_items.yml/dispatches`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `token ${p}`,
-          'Accept': 'application/vnd.github.v3+json',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ ref: 'main', inputs: { delete_ids: q.join(',') } })
-      }
-    );
-
-    if (r.status === 204) {
-      const cnt = q.length;
-      saveQueue([]);
-      updateApplyBtn();
-      toast(`✅ 완료 · ${cnt}개 삭제 처리 중 (약 1~2분 소요)`, 5000);
-    } else if (r.status === 401) {
-      throw new Error('토큰이 유효하지 않습니다. ⚙ 설정에서 다시 입력해 주세요.');
-    } else if (r.status === 403) {
-      throw new Error('Actions 권한이 없습니다. PAT에 Actions: Read and write 권한을 추가하세요.');
-    } else if (r.status === 422) {
-      throw new Error('워크플로우를 찾을 수 없습니다. GitHub에 push 후 다시 시도하세요.');
-    } else {
-      const t = await r.text().catch(() => '');
-      throw new Error(`HTTP ${r.status}${t ? ': ' + t.slice(0, 120) : ''}`);
-    }
-  } catch(err) {
-    updateApplyBtn();
-    toast(`❌ 실패: ${err.message}`, 8000);
-  }
+  toast('🗑 삭제됨 · GitHub에 자동 반영됩니다');
+  scheduleAutoApply();
 }
 
 /* ── 초기화 ── */
 (async () => {
   try {
-    updateApplyBtn();
     ALL = await loadMeta();
     const latest = ALL[0]?.crawled_at?.slice(0, 10) || '—';
     document.getElementById('updated').textContent =
       `최근 갱신: ${latest} · 총 ${ALL.length}개`;
     render();
+    if (getQueue().length && getPat()) dispatchDeletes();   // 이전에 예약된 삭제 자동 반영
   } catch(err) {
     document.getElementById('root').innerHTML =
       `<div class="loader"><span style="color:var(--danger)">로드 실패: ${err.message}</span></div>`;
