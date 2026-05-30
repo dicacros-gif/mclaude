@@ -2,14 +2,13 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Midjourney Gallery</title>
 <style>
-/* ── Variables ── */
-:root {
-  --bg:#0d0d0d; --card:#181818; --border:#2c2c2c;
-  --accent:#7c6ff7; --accent2:#f76f9e;
-  --text:#e2e2e2; --muted:#666; --del:#e74c3c;
+:root{
+  --bg:#0d0d0d;--surface:#161616;--border:#252525;
+  --accent:#7c6ff7;--accent2:#f76f9e;
+  --text:#e0e0e0;--muted:#5a5a5a;--danger:#e74c3c;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:var(--bg);color:var(--text);
@@ -17,98 +16,130 @@ body{background:var(--bg);color:var(--text);
 
 /* ── Header ── */
 header{
-  position:sticky;top:0;z-index:200;
-  background:rgba(13,13,13,.93);backdrop-filter:blur(14px);
+  position:sticky;top:0;z-index:300;
+  background:rgba(13,13,13,.95);backdrop-filter:blur(16px);
   border-bottom:1px solid var(--border);
-  padding:12px 22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
-header h1{font-size:1.05rem;font-weight:700;
+  padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+}
+.logo{
+  font-size:1rem;font-weight:700;
   background:linear-gradient(135deg,var(--accent),var(--accent2));
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;}
-.meta{font-size:.73rem;color:var(--muted);}
-.tabs{display:flex;gap:6px;flex-wrap:wrap;}
-.tab-btn{padding:5px 15px;border-radius:18px;border:1px solid var(--border);
-  background:transparent;color:var(--muted);font-size:.8rem;cursor:pointer;transition:all .2s;}
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  white-space:nowrap;
+}
+.updated{font-size:.72rem;color:var(--muted);}
+.tabs{display:flex;gap:5px;flex-wrap:wrap;}
+.tab-btn{
+  padding:5px 14px;border-radius:16px;border:1px solid var(--border);
+  background:transparent;color:var(--muted);font-size:.78rem;cursor:pointer;transition:all .2s;
+}
 .tab-btn:hover{border-color:var(--accent);color:var(--text);}
-.tab-btn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
-#stat{font-size:.75rem;color:var(--muted);margin-left:auto;}
-.settings-btn{padding:5px 13px;border-radius:18px;cursor:pointer;
-  border:1px solid var(--border);background:transparent;
-  color:var(--muted);font-size:.78rem;transition:all .2s;}
-.settings-btn:hover{border-color:#fff;color:#fff;}
+.tab-btn.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+#count{font-size:.74rem;color:var(--muted);margin-left:auto;}
+.gear-btn{
+  padding:5px 12px;border-radius:16px;border:1px solid var(--border);
+  background:transparent;color:var(--muted);font-size:.76rem;cursor:pointer;
+  transition:all .2s;white-space:nowrap;
+}
+.gear-btn:hover{color:var(--text);border-color:#888;}
 
 /* ── Grid ── */
-.grid{columns:5;column-gap:6px;padding:16px;}
+.grid{columns:5;column-gap:6px;padding:14px;}
 @media(max-width:1400px){.grid{columns:4;}}
 @media(max-width:1050px){.grid{columns:3;}}
 @media(max-width:680px) {.grid{columns:2;}}
 @media(max-width:400px) {.grid{columns:1;}}
 
 /* ── Card ── */
-.card{break-inside:avoid;margin-bottom:6px;border-radius:10px;overflow:hidden;
-  position:relative;background:var(--card);cursor:pointer;transition:transform .2s;}
-.card:hover{transform:scale(1.015);z-index:2;}
-.card img,.card video{width:100%;height:auto;display:block;
-  max-height:560px;object-fit:cover;}
-.card img.ph{min-height:120px;background:var(--card);}
+.card{
+  break-inside:avoid;margin-bottom:6px;border-radius:10px;overflow:hidden;
+  position:relative;background:var(--surface);cursor:pointer;
+  transition:transform .2s,box-shadow .2s;
+}
+.card:hover{transform:scale(1.014);box-shadow:0 4px 20px rgba(0,0,0,.5);z-index:2;}
+.card-img{
+  width:100%;height:auto;display:block;
+  max-height:580px;object-fit:cover;background:var(--surface);
+  transition:opacity .3s;
+}
+.card-img.lazy{opacity:0;}
+.card-img.loaded{opacity:1;}
 
 /* ── Overlay ── */
-.overlay{position:absolute;inset:0;
-  background:linear-gradient(to top,rgba(0,0,0,.88) 0%,transparent 55%);
+.overlay{
+  position:absolute;inset:0;
+  background:linear-gradient(to top,rgba(0,0,0,.88) 0%,transparent 50%);
   opacity:0;transition:opacity .22s;
-  display:flex;flex-direction:column;justify-content:flex-end;padding:10px 11px;}
+  display:flex;flex-direction:column;justify-content:flex-end;
+  padding:10px 11px;pointer-events:none;
+}
 .card:hover .overlay{opacity:1;}
-.ov-prompt{font-size:.7rem;color:#ddd;line-height:1.45;
-  display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;}
-.ov-user{font-size:.66rem;color:var(--accent);margin-top:3px;}
+.ov-prompt{
+  font-size:.69rem;color:#ddd;line-height:1.45;
+  display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;
+}
+.ov-user{font-size:.65rem;color:var(--accent);margin-top:3px;}
 
 /* ── Badges ── */
-.badge{position:absolute;top:7px;left:8px;background:rgba(0,0,0,.6);
-  color:#bbb;font-size:.6rem;padding:2px 7px;border-radius:5px;pointer-events:none;}
+.badge{
+  position:absolute;top:7px;left:8px;
+  background:rgba(0,0,0,.65);color:#ccc;
+  font-size:.6rem;padding:2px 8px;border-radius:5px;pointer-events:none;
+}
+.play-badge{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:42px;height:42px;border-radius:50%;
+  background:rgba(0,0,0,.55);border:2px solid rgba(255,255,255,.6);
+  color:#fff;font-size:16px;display:flex;align-items:center;justify-content:center;
+  pointer-events:none;opacity:0;transition:opacity .22s;padding-left:3px;
+}
+.card:hover .play-badge{opacity:1;}
 
 /* ── Delete button ── */
 .del-btn{
-  position:absolute;top:6px;right:7px;width:26px;height:26px;
-  border-radius:50%;background:rgba(0,0,0,.6);
-  border:1px solid rgba(255,255,255,.2);
-  color:#ccc;font-size:13px;display:flex;align-items:center;justify-content:center;
+  position:absolute;top:6px;right:7px;
+  width:26px;height:26px;border-radius:50%;
+  background:rgba(0,0,0,.6);border:1px solid rgba(255,255,255,.2);
+  color:#ccc;font-size:13px;line-height:1;
+  display:flex;align-items:center;justify-content:center;
   cursor:pointer;opacity:0;transition:opacity .2s,background .2s;z-index:10;
-  line-height:1;
 }
-.del-btn:hover{background:var(--del);border-color:var(--del);color:#fff;}
+.del-btn:hover{background:var(--danger);border-color:var(--danger);color:#fff;}
 .card:hover .del-btn{opacity:1;}
+.del-btn.deleting{opacity:1;background:var(--danger);}
 
-/* ── Loader / empty ── */
+/* ── Loader ── */
 .loader{display:flex;align-items:center;justify-content:center;
-  height:60vh;font-size:.9rem;color:var(--muted);flex-direction:column;gap:12px;}
-.spinner{width:34px;height:34px;border:3px solid var(--border);
-  border-top-color:var(--accent);border-radius:50%;
-  animation:spin .7s linear infinite;}
+  height:60vh;flex-direction:column;gap:12px;color:var(--muted);font-size:.9rem;}
+.spinner{width:32px;height:32px;border:3px solid var(--border);
+  border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg);}}
 
 /* ── Modal ── */
-.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.75);
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.8);
   display:flex;align-items:center;justify-content:center;z-index:500;padding:20px;}
 .modal-bg.hidden{display:none;}
-.modal{background:#1c1c1c;border:1px solid var(--border);
-  border-radius:14px;padding:28px;max-width:430px;width:100%;}
-.modal h2{font-size:1rem;margin-bottom:8px;}
-.modal p{font-size:.8rem;color:var(--muted);margin-bottom:16px;line-height:1.55;}
-.modal a{color:var(--accent);text-decoration:none;}
-.modal input{width:100%;padding:9px 12px;border-radius:8px;
-  border:1px solid var(--border);background:#111;
-  color:var(--text);font-size:.85rem;margin-bottom:14px;outline:none;}
+.modal{background:#1b1b1b;border:1px solid var(--border);
+  border-radius:14px;padding:26px;max-width:420px;width:100%;}
+.modal h2{font-size:.95rem;margin-bottom:8px;}
+.modal p{font-size:.78rem;color:var(--muted);margin-bottom:14px;line-height:1.6;}
+.modal a{color:var(--accent);}
+.modal input{width:100%;padding:8px 11px;border-radius:7px;
+  border:1px solid var(--border);background:#0f0f0f;color:var(--text);
+  font-size:.82rem;margin-bottom:12px;outline:none;}
 .modal input:focus{border-color:var(--accent);}
-.modal-btns{display:flex;gap:8px;justify-content:flex-end;}
-.btn-primary{padding:8px 20px;border-radius:8px;border:none;
-  background:var(--accent);color:#fff;font-size:.85rem;cursor:pointer;}
-.btn-cancel{padding:8px 16px;border-radius:8px;border:1px solid var(--border);
-  background:transparent;color:var(--muted);font-size:.85rem;cursor:pointer;}
+.modal-row{display:flex;gap:8px;justify-content:flex-end;}
+.btn-ok{padding:7px 18px;border-radius:7px;border:none;
+  background:var(--accent);color:#fff;font-size:.82rem;cursor:pointer;}
+.btn-cancel{padding:7px 14px;border-radius:7px;
+  border:1px solid var(--border);background:transparent;
+  color:var(--muted);font-size:.82rem;cursor:pointer;}
 .btn-cancel:hover{color:var(--text);}
 
 /* ── Toast ── */
-#toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
   background:#222;border:1px solid var(--border);color:var(--text);
-  padding:10px 22px;border-radius:22px;font-size:.82rem;
+  padding:9px 20px;border-radius:20px;font-size:.8rem;
   opacity:0;transition:opacity .3s;pointer-events:none;z-index:600;white-space:nowrap;}
 #toast.show{opacity:1;}
 </style>
@@ -117,37 +148,35 @@ header h1{font-size:1.05rem;font-weight:700;
 
 <!-- Header -->
 <header>
-  <h1>🎨 Midjourney Gallery</h1>
-  <span class="meta" id="updated"></span>
+  <div class="logo">🎨 Midjourney Gallery</div>
+  <div class="updated" id="updated">로드 중...</div>
   <div class="tabs">
-    <button class="tab-btn active" onclick="setFilter('all',this)">All</button>
-    <button class="tab-btn" onclick="setFilter('image',this)">Images</button>
-    <button class="tab-btn" onclick="setFilter('style',this)">Styles</button>
-    <button class="tab-btn" onclick="setFilter('video',this)">Videos</button>
+    <button class="tab-btn on"  onclick="setFilter('all',this)">All</button>
+    <button class="tab-btn"     onclick="setFilter('image',this)">Images</button>
+    <button class="tab-btn"     onclick="setFilter('style',this)">Styles</button>
+    <button class="tab-btn"     onclick="setFilter('video',this)">Videos</button>
   </div>
-  <span id="stat"></span>
-  <button class="settings-btn" onclick="openSettings()">⚙ GitHub 설정</button>
+  <span id="count"></span>
+  <button class="gear-btn" onclick="openModal()">⚙ 삭제 설정</button>
 </header>
 
-<div id="root">
-  <div class="loader"><div class="spinner"></div><span>불러오는 중…</span></div>
-</div>
+<div id="root"><div class="loader"><div class="spinner"></div><span>불러오는 중…</span></div></div>
 
 <!-- PAT 설정 모달 -->
 <div class="modal-bg hidden" id="modal">
   <div class="modal">
     <h2>🔑 GitHub 토큰 설정</h2>
     <p>
-      썸네일 <b>✕ 삭제</b> 기능을 사용하려면 GitHub PAT(Personal Access Token)이 필요합니다.<br><br>
-      <a href="https://github.com/settings/tokens/new?scopes=repo" target="_blank">
-        → 토큰 발급 페이지 열기
-      </a> (repo 권한 체크 후 생성)<br><br>
-      입력한 토큰은 <b>이 브라우저에만</b> 저장됩니다.
+      썸네일 <b>✕ 삭제</b> 기능에는 GitHub Personal Access Token이 필요합니다.<br>
+      <a href="https://github.com/settings/tokens/new?scopes=repo&description=MJ+Gallery" target="_blank">
+        → 토큰 발급 페이지 (repo 권한 체크 후 생성)
+      </a><br><br>
+      토큰은 이 브라우저의 <b>localStorage</b>에만 저장됩니다.
     </p>
-    <input type="password" id="pat-input" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx">
-    <div class="modal-btns">
+    <input type="password" id="pat-input" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+    <div class="modal-row">
       <button class="btn-cancel" onclick="closeModal()">취소</button>
-      <button class="btn-primary" onclick="savePat()">저장</button>
+      <button class="btn-ok" onclick="savePat()">저장</button>
     </div>
   </div>
 </div>
@@ -155,83 +184,78 @@ header h1{font-size:1.05rem;font-weight:700;
 <div id="toast"></div>
 
 <script>
-/* ───── Config ───── */
-const OWNER = 'dicacros-gif';
-const REPO  = 'mclaude';
-const GHAPI = `https://api.github.com/repos/${OWNER}/${REPO}/contents`;
-const RAW   = `https://raw.githubusercontent.com/${OWNER}/${REPO}/main`;
-const SITE  = `https://${OWNER}.github.io/${REPO}`;
+/* ── 설정 ── */
+const OWNER  = 'dicacros-gif';
+const REPO   = 'mclaude';
+const GHAPI  = `https://api.github.com/repos/${OWNER}/${REPO}/contents`;
+const RAW    = `https://raw.githubusercontent.com/${OWNER}/${REPO}/main`;
+const SITE   = `https://${OWNER}.github.io/${REPO}`;
 
-/* ───── State ───── */
-let ALL_ITEMS = [];
-let filter = 'all';
+/* ── 상태 ── */
+let ALL  = [];
+let FILT = 'all';
 
-/* ───── Toast ───── */
+/* ── Toast ── */
 function toast(msg, ms=2800){
   const el=document.getElementById('toast');
   el.textContent=msg; el.classList.add('show');
   clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),ms);
 }
 
-/* ───── Modal ───── */
-function openSettings(){
-  document.getElementById('pat-input').value = localStorage.getItem('gh_pat')||'';
+/* ── Modal ── */
+function openModal(){
+  document.getElementById('pat-input').value=localStorage.getItem('gh_pat')||'';
   document.getElementById('modal').classList.remove('hidden');
 }
-function closeModal(){ document.getElementById('modal').classList.add('hidden'); }
+function closeModal(){document.getElementById('modal').classList.add('hidden');}
 function savePat(){
   const v=document.getElementById('pat-input').value.trim();
   if(!v){toast('토큰을 입력해 주세요');return;}
   localStorage.setItem('gh_pat',v); closeModal(); toast('✅ 토큰 저장 완료');
 }
 
-/* ───── Load metadata ───── */
+/* ── 메타데이터 로드 ── */
 async function loadMeta(){
-  const r = await fetch(`${RAW}/data/metadata.json?t=${Date.now()}`);
+  const r=await fetch(`${RAW}/data/metadata.json?t=${Date.now()}`);
   if(!r.ok) throw new Error(`metadata.json 로드 실패 (${r.status})`);
   return r.json();
 }
 
-/* ───── Filter ───── */
-function setFilter(type, btn){
-  filter=type;
-  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
+/* ── 필터 ── */
+function setFilter(type,btn){
+  FILT=type;
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
   render();
 }
-function filtered(){ return filter==='all' ? ALL_ITEMS : ALL_ITEMS.filter(i=>i.type===filter); }
+function filtered(){return FILT==='all'?ALL:ALL.filter(i=>i.type===FILT);}
 
-/* ───── Build card ───── */
-function esc(s){ return (s||'').replace(/[<>"']/g,c=>({'<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* ── 카드 생성 ── */
+function esc(s){return (s||'').replace(/[<>"']/g,c=>({'<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
-function mediaSrc(item){
-  // GitHub Pages 저장 파일 우선 → CDN URL 폴백
+function thumbSrc(item){
+  // 저장된 파일 우선 → CDN URL 폴백
   if(item.file_path) return `${SITE}/${item.file_path}`;
   return item.url||'';
 }
-function posterSrc(item){
-  if(item.poster) return `${SITE}/${item.poster}`;
-  return item.poster_url||'';
-}
 
 function buildCard(item){
-  const src    = mediaSrc(item);
-  const poster = posterSrc(item);
-  const prompt = esc(item.prompt||'').slice(0,220);
-  const user   = item.username ? '@'+item.username : '';
+  const src    = thumbSrc(item);
+  const prompt = esc(item.prompt||'').slice(0,200);
+  const user   = item.username?'@'+item.username:'';
   const link   = esc(item.link||'#');
-  const badge  = item.type==='video' ? '▶ Video' : item.type==='style' ? '✦ Style' : '';
+  const isVid  = item.type==='video';
+  const badge  = isVid ? '▶ Video' : item.type==='style' ? '✦ Style' : '';
 
-  const media = item.type==='video'
-    ? `<video src="${src}" poster="${poster}" loop muted playsinline preload="none"
-         onmouseover="this.play()" onmouseout="this.pause();this.currentTime=0"
-         onerror="this.style.display='none'"></video>`
-    : `<img class="ph" src="${src}" alt="${prompt}" loading="lazy"
-         onerror="this.style.opacity='.25'">`;
-
-  return `<div class="card" id="card-${item.id}">
-    <div onclick="window.open('${link}','_blank')">${media}</div>
+  return `<div class="card" id="c-${item.id}">
+    <div onclick="window.open('${link}','_blank')">
+      <img class="card-img lazy"
+           data-src="${src}"
+           alt="${prompt}"
+           onerror="this.src='';this.style.minHeight='120px'">
+    </div>
     ${badge?`<span class="badge">${badge}</span>`:''}
+    ${isVid?'<div class="play-badge">▶</div>':''}
     <button class="del-btn" title="삭제" onclick="confirmDel(event,'${item.id}')">✕</button>
     <div class="overlay" onclick="window.open('${link}','_blank')">
       ${prompt?`<div class="ov-prompt">${prompt}</div>`:''}
@@ -240,110 +264,115 @@ function buildCard(item){
   </div>`;
 }
 
-/* ───── Render ───── */
+/* ── 렌더 ── */
 function render(){
-  const items = filtered();
-  document.getElementById('stat').textContent = `${items.length}개`;
-  const root = document.getElementById('root');
+  const items=filtered();
+  document.getElementById('count').textContent=`${items.length}개`;
+  const root=document.getElementById('root');
   if(!items.length){
-    root.innerHTML='<div class="loader"><span>항목이 없습니다</span></div>';
+    root.innerHTML='<div class="loader"><span>항목 없음</span></div>';
     return;
   }
   root.innerHTML=`<div class="grid">${items.map(buildCard).join('')}</div>`;
+
+  // Lazy load
+  const io=new IntersectionObserver(entries=>{
+    entries.forEach(e=>{
+      if(e.isIntersecting){
+        const img=e.target;
+        img.src=img.dataset.src;
+        img.classList.remove('lazy');
+        img.onload=()=>img.classList.add('loaded');
+        io.unobserve(img);
+      }
+    });
+  },{rootMargin:'400px'});
+  root.querySelectorAll('img.lazy').forEach(img=>io.observe(img));
 }
 
-/* ───── GitHub API helpers ───── */
-function pat(){ return localStorage.getItem('gh_pat')||''; }
-function ghHeaders(){
-  return { Authorization:`token ${pat()}`,
-           Accept:'application/vnd.github.v3+json',
-           'Content-Type':'application/json' };
-}
+/* ── GitHub API ── */
+function pat(){return localStorage.getItem('gh_pat')||'';}
+function ghH(){return{Authorization:`token ${pat()}`,Accept:'application/vnd.github.v3+json','Content-Type':'application/json'};}
 
 async function ghGet(path){
-  const r=await fetch(`${GHAPI}/${path}`,{headers:ghHeaders()});
+  const r=await fetch(`${GHAPI}/${path}`,{headers:ghH()});
   if(!r.ok) throw new Error(`GET ${path} → ${r.status}`);
   return r.json();
 }
-async function ghDelete(path,sha,msg){
-  const r=await fetch(`${GHAPI}/${path}`,{method:'DELETE',headers:ghHeaders(),
+async function ghDel(path,sha,msg){
+  const r=await fetch(`${GHAPI}/${path}`,{method:'DELETE',headers:ghH(),
     body:JSON.stringify({message:msg,sha})});
-  if(!r.ok){ const t=await r.text(); throw new Error(`DELETE ${path} → ${r.status}: ${t}`); }
+  if(!r.ok){const t=await r.text();throw new Error(`DELETE ${path} → ${r.status}: ${t}`);}
 }
 async function ghPut(path,sha,content,msg){
-  const encoded=btoa(unescape(encodeURIComponent(content)));
-  const r=await fetch(`${GHAPI}/${path}`,{method:'PUT',headers:ghHeaders(),
-    body:JSON.stringify({message:msg,content:encoded,sha})});
-  if(!r.ok){ const t=await r.text(); throw new Error(`PUT ${path} → ${r.status}: ${t}`); }
+  const r=await fetch(`${GHAPI}/${path}`,{method:'PUT',headers:ghH(),
+    body:JSON.stringify({message:msg,
+      content:btoa(unescape(encodeURIComponent(content))),sha})});
+  if(!r.ok){const t=await r.text();throw new Error(`PUT ${path} → ${r.status}: ${t}`);}
 }
 
-/* ───── Delete ───── */
-function confirmDel(e, id){
+/* ── 삭제 ── */
+function confirmDel(e,id){
   e.stopPropagation();
-  if(!pat()){
-    toast('⚠️ 삭제하려면 먼저 GitHub 토큰을 설정해 주세요.');
-    openSettings(); return;
-  }
-  if(!confirm('이 항목을 삭제할까요?\n(갤러리 + GitHub 파일 모두 삭제됩니다)')) return;
+  if(!pat()){toast('⚠️ 삭제하려면 먼저 GitHub 토큰을 설정해 주세요.');openModal();return;}
+  if(!confirm('이 썸네일을 삭제할까요?\n(갤러리 + GitHub 파일에서 모두 삭제됩니다)'))return;
   doDelete(id);
 }
 
 async function doDelete(id){
-  const item = ALL_ITEMS.find(i=>i.id===id);
-  if(!item) return;
+  const item=ALL.find(i=>i.id===id);
+  if(!item)return;
 
   // 즉시 UI 처리
-  const card=document.getElementById(`card-${id}`);
-  if(card){ card.style.opacity='.35'; card.style.pointerEvents='none'; }
-  toast('⏳ 삭제 중…', 10000);
+  const card=document.getElementById(`c-${id}`);
+  const btn=card?.querySelector('.del-btn');
+  if(card){card.style.opacity='.3';card.style.pointerEvents='none';}
+  if(btn) btn.classList.add('deleting');
+  toast('⏳ 삭제 중…',10000);
 
   try{
-    // 1) 미디어 파일(들) 삭제
-    const files=[];
-    if(item.file_path) files.push(item.file_path);
-    if(item.poster)    files.push(item.poster);
-    for(const fp of files){
+    // 1) 썸네일 파일 삭제
+    if(item.file_path){
       try{
-        const info=await ghGet(fp);
-        await ghDelete(fp,info.sha,`delete: remove media ${id}`);
-      }catch(e){ console.warn('파일 삭제 스킵:',fp,e.message); }
+        const info=await ghGet(item.file_path);
+        await ghDel(item.file_path,info.sha,`delete: thumbnail ${id}`);
+      }catch(e){console.warn('파일 삭제 스킵:',e.message);}
     }
 
     // 2) metadata.json 업데이트
-    const metaInfo = await ghGet('data/metadata.json');
-    // GitHub API는 base64로 반환 (줄바꿈 포함)
-    const raw      = atob(metaInfo.content.replace(/\n/g,''));
-    const decoded  = decodeURIComponent(escape(raw));
-    const updated  = JSON.parse(decoded).filter(i=>i.id!==id);
-    await ghPut('data/metadata.json', metaInfo.sha,
-                JSON.stringify(updated,null,2), `delete: remove ${id}`);
+    const metaInfo=await ghGet('data/metadata.json');
+    const raw=atob(metaInfo.content.replace(/\n/g,''));
+    const updated=JSON.parse(decodeURIComponent(escape(raw))).filter(i=>i.id!==id);
+    await ghPut('data/metadata.json',metaInfo.sha,
+                JSON.stringify(updated,null,2),`delete: remove ${id}`);
 
-    // 3) 로컬 상태 갱신
-    ALL_ITEMS = ALL_ITEMS.filter(i=>i.id!==id);
-    if(card) card.remove();
-    document.getElementById('stat').textContent=`${filtered().length}개`;
+    // 3) 로컬 갱신
+    ALL=ALL.filter(i=>i.id!==id);
+    card?.remove();
+    document.getElementById('count').textContent=`${filtered().length}개`;
     document.getElementById('updated').textContent=
-      `최근 갱신: ${ALL_ITEMS[0]?.crawled_at?.slice(0,10)||'—'} · 총 ${ALL_ITEMS.length}개`;
+      `최근 갱신: ${ALL[0]?.crawled_at?.slice(0,10)||'—'} · 총 ${ALL.length}개`;
     toast('✅ 삭제 완료');
 
   }catch(err){
     console.error(err);
-    if(card){ card.style.opacity='1'; card.style.pointerEvents=''; }
-    toast('❌ 삭제 실패: '+err.message, 6000);
+    if(card){card.style.opacity='1';card.style.pointerEvents='';}
+    if(btn) btn.classList.remove('deleting');
+    toast('❌ 삭제 실패: '+err.message,6000);
   }
 }
 
-/* ───── Init ───── */
+/* ── 초기화 ── */
 (async()=>{
   try{
-    ALL_ITEMS = await loadMeta();
-    const latest = ALL_ITEMS[0]?.crawled_at?.slice(0,10)||'—';
+    ALL=await loadMeta();
+    const latest=ALL[0]?.crawled_at?.slice(0,10)||'—';
     document.getElementById('updated').textContent=
-      `최근 갱신: ${latest} · 총 ${ALL_ITEMS.length}개`;
+      `최근 갱신: ${latest} · 총 ${ALL.length}개`;
     render();
   }catch(err){
     document.getElementById('root').innerHTML=
-      `<div class="loader"><span style="color:#e74c3c">로드 실패: ${err.message}</span></div>`;
+      `<div class="loader"><span style="color:var(--danger)">로드 실패: ${err.message}</span></div>`;
   }
 })();
 </script>

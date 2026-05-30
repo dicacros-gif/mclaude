@@ -5,11 +5,6 @@ on:
     # 매일 UTC 02:00 (한국시간 11:00) 실행
     - cron: "0 2 * * *"
   workflow_dispatch:
-    inputs:
-      debug:
-        description: "Debug output"
-        required: false
-        default: "false"
 
 permissions:
   contents: write
@@ -37,26 +32,28 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Run scraper (download images & videos)
+      - name: Run scraper
+        # MJ_COOKIES: 선택 - 없어도 3개 탭 모두 크롤링 시도
         env:
           MJ_COOKIES: ${{ secrets.MJ_COOKIES }}
+          PYTHONIOENCODING: utf-8
         run: python scraper.py
 
-      - name: Commit and push new media + metadata
+      - name: Commit and push
         run: |
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Actions"
 
-          # 새로 다운로드된 미디어 파일 + metadata.json 스테이징
+          # 썸네일 파일 + metadata.json + index.html 스테이징
           git add data/metadata.json index.html
           git add media/ 2>/dev/null || true
 
           if git diff --staged --quiet; then
-            echo "변경 없음 — 커밋 건너뜀"
+            echo "No changes to commit."
           else
             TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
             COUNT=$(python -c "import json; print(len(json.load(open('data/metadata.json'))))")
-            git commit -m "crawl: $TIMESTAMP  (누적 $COUNT 개)"
+            git commit -m "crawl: $TIMESTAMP  (total $COUNT)"
             git push
-            echo "✅ Push 완료: 총 $COUNT 개"
+            echo "Pushed. Total: $COUNT items."
           fi
