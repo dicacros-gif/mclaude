@@ -30,12 +30,6 @@ header{
 .tab-btn:hover{border-color:var(--accent);color:var(--text);}
 .tab-btn.on{background:var(--accent);border-color:var(--accent);color:#fff;}
 #count{font-size:.74rem;color:var(--muted);margin-left:auto;}
-.gear-btn{
-  padding:5px 12px;border-radius:16px;border:1px solid var(--border);
-  background:transparent;color:var(--muted);font-size:.76rem;cursor:pointer;
-  transition:all .2s;white-space:nowrap;
-}
-.gear-btn:hover{color:var(--text);border-color:#888;}
 
 /* ── Grid ── */
 .grid{columns:5;column-gap:6px;padding:14px;}
@@ -108,28 +102,6 @@ header{
   border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg);}}
 
-/* ── Modal ── */
-.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.8);
-  display:flex;align-items:center;justify-content:center;z-index:500;padding:20px;}
-.modal-bg.hidden{display:none;}
-.modal{background:#1b1b1b;border:1px solid var(--border);
-  border-radius:14px;padding:26px;max-width:440px;width:100%;}
-.modal h2{font-size:.95rem;margin-bottom:8px;}
-.modal p{font-size:.78rem;color:var(--muted);margin-bottom:14px;line-height:1.6;}
-.modal a{color:var(--accent);}
-.modal small{font-size:.7rem;color:#555;display:block;margin-top:4px;}
-.modal input{width:100%;padding:8px 11px;border-radius:7px;
-  border:1px solid var(--border);background:#0f0f0f;color:var(--text);
-  font-size:.82rem;margin-bottom:12px;outline:none;}
-.modal input:focus{border-color:var(--accent);}
-.modal-row{display:flex;gap:8px;justify-content:flex-end;}
-.btn-ok{padding:7px 18px;border-radius:7px;border:none;
-  background:var(--accent);color:#fff;font-size:.82rem;cursor:pointer;}
-.btn-cancel{padding:7px 14px;border-radius:7px;
-  border:1px solid var(--border);background:transparent;
-  color:var(--muted);font-size:.82rem;cursor:pointer;}
-.btn-cancel:hover{color:var(--text);}
-
 /* ── Toast ── */
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
   background:#222;border:1px solid var(--border);color:var(--text);
@@ -150,29 +122,9 @@ header{
     <button class="tab-btn"     onclick="setFilter('video',this)">Videos</button>
   </div>
   <span id="count"></span>
-  <button class="gear-btn" onclick="openModal()">⚙ 설정</button>
 </header>
 
 <div id="root"><div class="loader"><div class="spinner"></div><span>불러오는 중…</span></div></div>
-
-<!-- 설정 모달 -->
-<div class="modal-bg hidden" id="modal">
-  <div class="modal">
-    <h2>⚙ 삭제 설정</h2>
-    <p>
-      ✕ 를 누르면 <b>즉시 화면에서 사라지고</b>, 자동으로 GitHub Actions가 실행되어<br>
-      메타데이터와 <b>저장된 이미지 파일</b>까지 삭제됩니다.<br><br>
-      이 토큰은 <b>Actions: Read and write</b> 권한만 있으면 됩니다.<br>
-      <a href="https://github.com/settings/personal-access-tokens/new" target="_blank">→ Fine-grained PAT 발급</a>
-      <small>Repository: <b>dicacros-gif/mclaude</b> &nbsp;→&nbsp; Permissions &nbsp;→&nbsp; Actions: Read and write</small>
-    </p>
-    <input type="password" id="pat-input" placeholder="github_pat_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
-    <div class="modal-row">
-      <button class="btn-cancel" onclick="closeModal()">취소</button>
-      <button class="btn-ok" onclick="savePat()">저장</button>
-    </div>
-  </div>
-</div>
 
 <div id="toast"></div>
 
@@ -183,15 +135,17 @@ const REPO  = 'mclaude';
 const RAW   = `https://raw.githubusercontent.com/${OWNER}/${REPO}/main`;
 const SITE  = `https://${OWNER}.github.io/${REPO}`;
 
-const LS_PAT   = 'mj_actions_pat';
 const LS_QUEUE = 'mj_delete_queue';
 
 /* ── 상태 ── */
 let ALL  = [];
 let FILT = 'all';
 
-/* ── 삭제 큐 ── */
-function getPat()   { return localStorage.getItem(LS_PAT) || ''; }
+/* ── 삭제 큐 (토큰 없이 동작) ──
+   X 클릭 → 큐(localStorage)에 ID 적재 + 즉시 화면에서 숨김.
+   실제 GitHub 파일/메타데이터 삭제는 자가 호스팅 러너(run_local.py)가
+   다음 실행 때 이 큐를 읽어 반영하고 push 한다.
+   서버에서 항목이 사라지면 loadMeta()가 큐에서 자동 제거(self-heal). */
 function getQueue() {
   try { return JSON.parse(localStorage.getItem(LS_QUEUE) || '[]'); }
   catch { return []; }
@@ -202,82 +156,11 @@ function addToQueue(id) {
   if (!q.includes(id)) { q.push(id); saveQueue(q); }
 }
 
-/* ── 자동 반영 (디바운스) ── */
-let _applyTimer = null;
-let _applying   = false;
-
-function scheduleAutoApply() {
-  if (!getPat()) {                         // 토큰 없으면 설정 유도
-    toast('⚠️ 삭제하려면 ⚙ 설정에서 토큰을 입력하세요');
-    openModal();
-    return;
-  }
-  clearTimeout(_applyTimer);
-  _applyTimer = setTimeout(dispatchDeletes, 3500);  // 연속 삭제를 한 번에 묶음 처리
-}
-
-async function dispatchDeletes() {
-  if (_applying) return;
-  const q = getQueue();
-  if (!q.length) return;
-  const p = getPat();
-  if (!p) { toast('⚠️ ⚙ 설정에서 토큰을 입력하세요'); openModal(); return; }
-
-  _applying = true;
-  toast('⏳ GitHub에 삭제 반영 중…', 8000);
-  try {
-    const r = await fetch(
-      `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/delete_items.yml/dispatches`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `token ${p}`,
-          'Accept': 'application/vnd.github.v3+json',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ ref: 'main', inputs: { delete_ids: q.join(',') } })
-      }
-    );
-    if (r.status === 204) {
-      toast(`✅ ${q.length}개 삭제 요청됨 · 곧 파일까지 삭제됩니다`, 4000);
-      // 큐는 유지 → 다음 로드 때 metadata에서 사라지면 자동 정리(self-heal)
-    } else if (r.status === 401) {
-      throw new Error('토큰이 유효하지 않습니다 (⚙ 설정에서 재입력)');
-    } else if (r.status === 403) {
-      throw new Error('Actions 권한 없음 (PAT에 Actions: Read and write 추가)');
-    } else if (r.status === 422) {
-      throw new Error('워크플로우 없음 (GitHub push 후 재시도)');
-    } else {
-      const t = await r.text().catch(() => '');
-      throw new Error(`HTTP ${r.status}${t ? ': ' + t.slice(0, 100) : ''}`);
-    }
-  } catch(err) {
-    toast(`❌ 반영 실패: ${err.message}`, 8000);
-  } finally {
-    _applying = false;
-  }
-}
-
 /* ── Toast ── */
 function toast(msg, ms=2800) {
   const el = document.getElementById('toast');
   el.textContent = msg; el.classList.add('show');
   clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('show'), ms);
-}
-
-/* ── Modal ── */
-function openModal() {
-  document.getElementById('pat-input').value = getPat();
-  document.getElementById('modal').classList.remove('hidden');
-}
-function closeModal() { document.getElementById('modal').classList.add('hidden'); }
-function savePat() {
-  const v = document.getElementById('pat-input').value.trim();
-  if (!v) { toast('토큰을 입력해 주세요'); return; }
-  localStorage.setItem(LS_PAT, v);
-  closeModal();
-  toast('✅ 토큰 저장 완료');
-  if (getQueue().length) dispatchDeletes();   // 예약돼 있던 삭제 자동 반영
 }
 
 /* ── 메타데이터 로드 (삭제 예약 항목 숨김 + 큐 자동 정리) ── */
@@ -372,8 +255,7 @@ function queueDel(e, id) {
   ALL = ALL.filter(i => i.id !== id);
   document.getElementById('count').textContent = `${filtered().length}개`;
   addToQueue(id);
-  toast('🗑 삭제됨 · GitHub에 자동 반영됩니다');
-  scheduleAutoApply();
+  toast('🗑 삭제됨 · 다음 동기화 때 GitHub에서 제거됩니다');
 }
 
 /* ── 초기화 ── */
@@ -384,7 +266,6 @@ function queueDel(e, id) {
     document.getElementById('updated').textContent =
       `최근 갱신: ${latest} · 총 ${ALL.length}개`;
     render();
-    if (getQueue().length && getPat()) dispatchDeletes();   // 이전에 예약된 삭제 자동 반영
   } catch(err) {
     document.getElementById('root').innerHTML =
       `<div class="loader"><span style="color:var(--danger)">로드 실패: ${err.message}</span></div>`;
