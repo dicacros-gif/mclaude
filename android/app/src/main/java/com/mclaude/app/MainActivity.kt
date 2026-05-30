@@ -207,7 +207,7 @@ class MainActivity : AppCompatActivity() {
                 if (total == 0) {
                     setStatus("이미지가 없습니다 — 로그인이 필요할 수 있어요. ‘로그인’을 눌러주세요")
                 } else {
-                    setStatus("완료 · 새로 $newCount장 · 총 ${total}장")
+                    setStatus("완료 · 새로 ${newCount}장 · 총 ${total}장")
                 }
             }
         }.start()
