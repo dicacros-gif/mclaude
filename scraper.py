@@ -1,360 +1,243 @@
 #!/usr/bin/env python3
 """
 Midjourney Explore Crawler
-Scrapes top images, styles, and videos from Midjourney's public explore page.
-New items are prepended to data/metadata.json (newest-first order).
+- 3개 탭(images / styles / videos) 크롤링
+  * images:  공개 탭 - 인증 불필요
+  * styles / videos: MJ_COOKIES 환경변수로 인증 시 활성화
+- HTML background-image 패턴으로 URL 추출
+- 브라우저 response 캡처로 미디어 파일 다운로드 (best-effort)
+- data/metadata.json 앞에 신규 항목 추가 (기존 보존)
 """
 
-import json
-import os
-import re
-import time
-import random
+import base64, json, os, re, time, random, urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright, Page, BrowserContext, Response
+import requests
+from playwright.sync_api import sync_playwright, BrowserContext
 
-# ── Configuration ──────────────────────────────────────────────────────────────
+# ── 설정 ──────────────────────────────────────────────────────────────────────
 
 TABS = [
-    {
-        "name": "images",
-        "url": "https://www.midjourney.com/explore?tab=top",
-        "type": "image",
-    },
-    {
-        "name": "styles",
-        "url": "https://www.midjourney.com/explore?tab=top_kits",
-        "type": "style",
-    },
-    {
-        "name": "videos",
-        "url": "https://www.midjourney.com/explore?tab=top_videos",
-        "type": "video",
-    },
+    {"name": "images",  "url": "https://www.midjourney.com/explore?tab=top",         "type": "image",  "auth": False},
+    {"name": "styles",  "url": "https://www.midjourney.com/explore?tab=top_kits",    "type": "style",  "auth": True},
+    {"name": "videos",  "url": "https://www.midjourney.com/explore?tab=top_videos",  "type": "video",  "auth": True},
 ]
 
-DATA_DIR = Path("data")
-METADATA_FILE = DATA_DIR / "metadata.json"
-MAX_ITEMS_PER_TAB = 100
-SCROLL_COUNT = 20
-SCROLL_DELAY = 2.0
+DATA_DIR  = Path("data")
+MEDIA_DIR = Path("media")
+META_FILE = DATA_DIR / "metadata.json"
 
-# CDN domains used by Midjourney
-CDN_PATTERNS = [
-    "cdn.midjourney.com",
-    "midjourney-video",
-    "imagecache.midjourney.com",
-]
+MAX_PER_TAB   = 50
+SCROLL_COUNT  = 20
+SCROLL_DELAY  = 1.8
+MAX_IMG_BYTES = 10 * 1024 * 1024   # 10 MB
+MAX_VID_BYTES = 80 * 1024 * 1024   # 80 MB
 
-# ── Data helpers ───────────────────────────────────────────────────────────────
+DL_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://www.midjourney.com/",
+}
 
+# ── 데이터 헬퍼 ──────────────────────────────────────────────────────────────
 
-def load_metadata() -> list:
-    if METADATA_FILE.exists():
-        try:
-            return json.loads(METADATA_FILE.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, IOError):
-            return []
+def load_meta():
+    if META_FILE.exists():
+        try: return json.loads(META_FILE.read_text("utf-8"))
+        except: return []
     return []
 
-
-def save_metadata(items: list) -> None:
+def save_meta(items):
     DATA_DIR.mkdir(exist_ok=True)
-    METADATA_FILE.write_text(
-        json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    META_FILE.write_text(json.dumps(items, indent=2, ensure_ascii=False), "utf-8")
 
+def dedup(items):
+    seen, out = set(), []
+    for it in items:
+        if it["id"] not in seen:
+            seen.add(it["id"]); out.append(it)
+    return out
 
-def make_id(url: str) -> str:
-    """Derive a stable ID from a CDN URL (extracts job UUID when possible)."""
-    m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", url)
-    return m.group(1) if m else str(abs(hash(url)))
+def get_ext(url, default="webp"):
+    p = urllib.parse.urlparse(url).path
+    e = os.path.splitext(p)[1].lstrip(".")
+    return e if e in ("jpg","jpeg","png","webp","gif","mp4","webm","mov") else default
 
+# ── 파일 저장 ────────────────────────────────────────────────────────────────
 
-def deduplicate(items: list) -> list:
-    seen, result = set(), []
-    for item in items:
-        if item["id"] not in seen:
-            seen.add(item["id"])
-            result.append(item)
-    return result
+def save_file(data: bytes, item_id: str, item_type: str, url: str, today: str) -> str | None:
+    ext    = get_ext(url, "mp4" if item_type == "video" else "webp")
+    subdir = MEDIA_DIR / (item_type + "s") / today
+    subdir.mkdir(parents=True, exist_ok=True)
+    dest   = subdir / f"{item_id}.{ext}"
+    if dest.exists() and dest.stat().st_size > 0:
+        return dest.as_posix()
+    dest.write_bytes(data)
+    print(f"    Saved {dest.name} ({len(data)//1024} KB)")
+    return dest.as_posix()
 
+def try_download(url: str, item_id: str, item_type: str, today: str) -> str | None:
+    """Python requests 로 직접 다운로드 시도 (CDN이 허용하는 경우)."""
+    if not url: return None
+    max_bytes = MAX_VID_BYTES if item_type == "video" else MAX_IMG_BYTES
+    try:
+        r = requests.get(url.split("?")[0], headers=DL_HEADERS, timeout=30, stream=True)
+        if r.status_code != 200: return None
+        buf, total = b"", 0
+        for chunk in r.iter_content(65536):
+            buf += chunk; total += len(chunk)
+            if total > max_bytes: return None
+        if len(buf) < 5000: return None  # too small = probably an error page
+        return save_file(buf, item_id, item_type, url, today)
+    except Exception:
+        return None
 
-def is_content_url(url: str) -> bool:
-    return any(p in url for p in CDN_PATTERNS) and bool(
-        re.search(r"\.(jpg|jpeg|png|webp|gif|mp4|webm)", url, re.I)
-    )
+# ── HTML 파싱 (background-image: image-set 패턴) ─────────────────────────────
 
-
-# ── API response parser ────────────────────────────────────────────────────────
-
-
-def parse_api_response(data, item_type: str, crawled_at: str) -> list:
-    """Extract items from an unknown Midjourney API JSON response."""
+def parse_html(html: str, item_type: str, crawled_at: str) -> list:
     items = []
-
-    def process(obj):
-        if not isinstance(obj, dict):
-            return
-
-        item_id = (
-            obj.get("id")
-            or obj.get("jobId")
-            or obj.get("job_id")
-            or obj.get("uuid")
-            or ""
-        )
-        if not item_id:
-            return
-        item_id = str(item_id)
-
-        image_url = (
-            obj.get("imageUrl")
-            or obj.get("image_url")
-            or obj.get("cdnUrl")
-            or obj.get("cdn_url")
-            or obj.get("url")
-            or ""
-        )
-        video_url = obj.get("videoUrl") or obj.get("video_url") or ""
-        poster_url = (
-            obj.get("poster")
-            or obj.get("thumbnailUrl")
-            or obj.get("thumbnail_url")
-            or image_url
-        )
-
-        if item_type == "video":
-            actual_url = video_url or image_url
-            actual_type = "video"
-        else:
-            actual_url = image_url
-            actual_type = item_type
-
-        if not actual_url:
-            return
-
-        prompt = obj.get("prompt") or obj.get("text") or obj.get("description") or ""
-        if isinstance(prompt, list):
-            prompt = " ".join(str(p) for p in prompt)
-
-        user = obj.get("user", {})
-        username = (
-            obj.get("username")
-            or (user.get("username") if isinstance(user, dict) else "")
-            or ""
-        )
-
-        likes = (
-            obj.get("likes")
-            or obj.get("reactions")
-            or obj.get("score")
-            or obj.get("ranking_score")
-            or 0
-        )
-
-        link = obj.get("link") or f"https://www.midjourney.com/jobs/{item_id}"
-
-        entry = {
-            "id": item_id,
-            "type": actual_type,
-            "url": actual_url,
-            "link": link,
-            "prompt": str(prompt)[:500],
-            "username": str(username)[:100],
-            "likes": likes,
+    # pattern: href="/jobs/{uuid}?index=N" ... style="...image-set(url(&quot;URL1&quot;) 1x, url(&quot;URL2&quot;) 2x)"
+    pattern = (
+        r'href="/jobs/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
+        r'(?:\?index=(\d+))?[^"]*"[^>]*?style="[^"]*image-set\('
+        r'url\(&quot;([^&]+)&quot;\)\s*1x'
+        r'(?:\s*,\s*url\(&quot;([^&]+)&quot;\)\s*2x)?'
+    )
+    for m in re.finditer(pattern, html, re.DOTALL):
+        job_id  = m.group(1)
+        index   = m.group(2) or "0"
+        url_1x  = m.group(3)
+        url_2x  = m.group(4) or url_1x
+        best    = url_2x or url_1x
+        uid     = f"{job_id}_{index}"
+        items.append({
+            "id":         uid,
+            "job_id":     job_id,
+            "type":       item_type,
+            "url":        best,
+            "url_thumb":  url_1x,
+            "link":       f"https://www.midjourney.com/jobs/{job_id}",
+            "prompt":     "",
+            "username":   "",
+            "likes":      0,
             "crawled_at": crawled_at,
-        }
-        if item_type == "video" and poster_url:
-            entry["poster"] = poster_url
+        })
 
-        items.append(entry)
-
-    # Unwrap common envelope structures
-    if isinstance(data, list):
-        for item in data:
-            process(item)
-    elif isinstance(data, dict):
-        found = False
-        for key in ("items", "jobs", "data", "results", "feed", "explore", "content", "images"):
-            if key in data and isinstance(data[key], list):
-                for item in data[key]:
-                    process(item)
-                found = True
-                break
-        if not found:
-            # Brute-force: find any list of dicts inside the response
-            for value in data.values():
-                if isinstance(value, list) and value and isinstance(value[0], dict):
-                    for item in value:
-                        process(item)
-                    break
-
-    return items
-
-
-# ── DOM fallback extraction ────────────────────────────────────────────────────
-
-
-def extract_from_dom(page: Page, item_type: str, crawled_at: str) -> list:
-    """Fallback: extract URLs directly from rendered DOM elements."""
-    items = []
-
-    if item_type in ("image", "style"):
-        srcs = page.evaluate("""
-            () => Array.from(document.querySelectorAll('img'))
-                .map(img => ({
-                    src: img.src || img.getAttribute('data-src') || '',
-                    alt: img.alt || '',
-                    link: img.closest('a') ? img.closest('a').href : ''
-                }))
-                .filter(o => o.src && o.src.includes('cdn.midjourney.com'))
-        """)
-        for obj in srcs:
-            url = obj.get("src", "")
-            if not url or not is_content_url(url):
-                continue
+    # Video: look for <video> or mp4 CDN URLs
+    if item_type == "video":
+        for url in re.findall(r'https://cdn\.midjourney\.com/[A-Za-z0-9_./-]+\.mp4', html):
+            m2 = re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', url)
+            uid = m2.group(1) if m2 else str(abs(hash(url)))
             items.append({
-                "id": make_id(url),
-                "type": item_type,
-                "url": url,
-                "link": obj.get("link", ""),
-                "prompt": obj.get("alt", ""),
-                "username": "",
-                "likes": 0,
-                "crawled_at": crawled_at,
+                "id": uid, "job_id": uid, "type": "video",
+                "url": url, "link": f"https://www.midjourney.com/jobs/{uid}",
+                "prompt": "", "username": "", "likes": 0, "crawled_at": crawled_at,
             })
 
-    elif item_type == "video":
-        srcs = page.evaluate("""
-            () => {
-                const results = [];
-                document.querySelectorAll('video').forEach(v => {
-                    const src = v.src || (v.querySelector('source') ? v.querySelector('source').src : '');
-                    const poster = v.poster || '';
-                    const link = v.closest('a') ? v.closest('a').href : '';
-                    if (src) results.push({ src, poster, link });
-                });
-                return results;
-            }
-        """)
-        for obj in srcs:
-            url = obj.get("src", "")
-            if not url:
-                continue
-            entry = {
-                "id": make_id(url),
-                "type": "video",
-                "url": url,
-                "link": obj.get("link", ""),
-                "prompt": "",
-                "username": "",
-                "likes": 0,
-                "crawled_at": crawled_at,
-            }
-            if obj.get("poster"):
-                entry["poster"] = obj["poster"]
-            items.append(entry)
+    return dedup(items)
 
-    return deduplicate(items)
+# ── 탭 크롤링 ────────────────────────────────────────────────────────────────
 
-
-# ── Tab scraper ────────────────────────────────────────────────────────────────
-
-
-def scrape_tab(context: BrowserContext, tab: dict, existing_ids: set) -> list:
-    """Scrape one tab; return list of new items not in existing_ids."""
+def scrape_tab(ctx: BrowserContext, tab: dict, existing_ids: set, today: str) -> list:
     crawled_at = datetime.now(timezone.utc).isoformat()
-    api_items: list = []
 
-    page = context.new_page()
+    # response 캡처 딕셔너리: url -> bytes
+    captured: dict[str, bytes] = {}
 
-    def on_response(resp: Response):
+    def on_resp(resp):
+        u = resp.url
+        if "cdn.midjourney.com" not in u: return
+        if not (".webp" in u or ".mp4" in u): return
         try:
-            if resp.status != 200:
-                return
-            ct = resp.headers.get("content-type", "")
-            if "json" not in ct:
-                return
-            url = resp.url
-            relevant_keywords = [
-                "explore", "jobs/search", "feed", "/pg/", "v1/imagine",
-                "api/app", "recent", "ranking",
-            ]
-            if not any(k in url for k in relevant_keywords):
-                return
-            data = resp.json()
-            parsed = parse_api_response(data, tab["type"], crawled_at)
-            if parsed:
-                print(f"    API hit: {url[:80]} → {len(parsed)} items")
-            api_items.extend(parsed)
+            body = resp.body()
+            if len(body) > 2000:
+                captured[u] = body
         except Exception:
             pass
 
-    page.on("response", on_response)
+    page = ctx.new_page()
+    page.on("response", on_resp)
 
     try:
         print(f"  Loading: {tab['url']}")
-        page.goto(tab["url"], wait_until="domcontentloaded", timeout=90000)
-        time.sleep(4 + random.uniform(0, 2))
+        page.goto(tab["url"], wait_until="domcontentloaded", timeout=90_000)
+        time.sleep(5 + random.uniform(0, 2))
 
-        # Incremental scroll to trigger lazy-load
+        # 스크롤하며 이미지 로딩 유도
         for i in range(SCROLL_COUNT):
             page.evaluate("window.scrollBy(0, window.innerHeight * 1.5)")
-            time.sleep(SCROLL_DELAY + random.uniform(0, 0.8))
-            if (i + 1) % 5 == 0:
-                print(f"    Scrolled {i+1}/{SCROLL_COUNT} …")
+            time.sleep(SCROLL_DELAY + random.uniform(0, 0.5))
+            if (i + 1) % 7 == 0:
+                print(f"    scroll {i+1}/{SCROLL_COUNT} ...")
 
-        # Give a moment for final requests to complete
-        time.sleep(2)
-
-        # DOM fallback
-        dom_items = extract_from_dom(page, tab["type"], crawled_at)
-        print(f"  DOM fallback: {len(dom_items)} items")
+        time.sleep(3)
+        html = page.content()
 
     except Exception as exc:
-        print(f"  ERROR scraping {tab['name']}: {exc}")
-        dom_items = []
+        print(f"  ERROR: {exc}")
+        html = ""
     finally:
         page.close()
 
-    combined = deduplicate(api_items + dom_items)
-    new_items = [it for it in combined if it["id"] not in existing_ids]
-    return new_items[:MAX_ITEMS_PER_TAB]
+    # HTML 파싱으로 아이템 추출
+    items = parse_html(html, tab["type"], crawled_at)
+    print(f"  HTML items: {len(items)},  browser-captured: {len(captured)}")
 
+    new_items = [it for it in items if it["id"] not in existing_ids]
+    new_items  = new_items[:MAX_PER_TAB]
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+    # ── 파일 저장 ─────────────────────────────────────────────────────────────
+    for it in new_items:
+        item_url  = it["url"]
+        item_type = it["type"]
+        uid       = it["id"]
 
+        # 1순위: 브라우저 캡처된 데이터
+        matched_data = None
+        for cap_url, data in captured.items():
+            if uid.split("_")[0] in cap_url:  # job_id 매칭
+                if (item_type == "video" and ".mp4" in cap_url) or \
+                   (item_type != "video" and ".webp" in cap_url):
+                    matched_data = (cap_url, data)
+                    break
+
+        if matched_data:
+            fp = save_file(matched_data[1], uid, item_type, matched_data[0], today)
+            if fp: it["file_path"] = fp
+        else:
+            # 2순위: requests 직접 다운로드 시도
+            fp = try_download(item_url, uid, item_type, today)
+            if fp: it["file_path"] = fp
+
+    return new_items
+
+# ── 메인 ─────────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    print("=" * 50)
-    print("Midjourney Explore Crawler")
-    print(f"Started: {datetime.now(timezone.utc).isoformat()}")
-    print("=" * 50)
+    print("=" * 52)
+    print("  Midjourney Explore Crawler")
+    print(f"  {datetime.now(timezone.utc).isoformat()}")
+    print("=" * 52)
 
-    existing = load_metadata()
-    existing_ids = {item["id"] for item in existing}
-    print(f"Loaded {len(existing)} existing items\n")
+    today    = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    existing = load_meta()
+    ex_ids   = {it["id"] for it in existing}
+    print(f"Existing: {len(existing)}\n")
 
+    has_cookies = bool(os.environ.get("MJ_COOKIES", "").strip())
     all_new: list = []
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--no-first-run",
-                "--no-zygote",
-                "--single-process",
-            ],
+            args=["--no-sandbox", "--disable-setuid-sandbox",
+                  "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote"],
         )
-
-        context = browser.new_context(
+        ctx = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -363,41 +246,52 @@ def main() -> int:
             viewport={"width": 1920, "height": 1080},
             locale="en-US",
             timezone_id="America/New_York",
-            extra_http_headers={
-                "Accept-Language": "en-US,en;q=0.9",
-            },
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
         )
 
-        # Optional: load cookies if provided via environment
-        cookie_json = os.environ.get("MJ_COOKIES", "")
-        if cookie_json:
+        # MJ_COOKIES 로드
+        if has_cookies:
             try:
-                cookies = json.loads(cookie_json)
-                context.add_cookies(cookies)
-                print("Loaded auth cookies from MJ_COOKIES env\n")
-            except Exception as exc:
-                print(f"Warning: could not parse MJ_COOKIES: {exc}\n")
+                ctx.add_cookies(json.loads(os.environ["MJ_COOKIES"]))
+                print("Auth cookies loaded\n")
+            except Exception as e:
+                print(f"Cookie load error: {e}\n")
+
+        # 메인 페이지 먼저 방문 (CF session warm-up)
+        warm_page = ctx.new_page()
+        try:
+            warm_page.goto("https://www.midjourney.com/", wait_until="domcontentloaded", timeout=30_000)
+            time.sleep(3)
+        except Exception:
+            pass
+        finally:
+            warm_page.close()
 
         for tab in TABS:
+            # 인증 필요 탭은 쿠키 없으면 건너뜀
+            if tab["auth"] and not has_cookies:
+                print(f"\n[{tab['name'].upper()}] skipped (no MJ_COOKIES)")
+                print("  -> GitHub Secrets > MJ_COOKIES 에 쿠키를 설정하면 활성화됩니다")
+                continue
+
             print(f"\n[{tab['name'].upper()}]")
-            new_items = scrape_tab(context, tab, existing_ids)
-            print(f"  → {len(new_items)} new items")
+            new_items = scrape_tab(ctx, tab, ex_ids, today)
+            print(f"  -> {len(new_items)} new")
             all_new.extend(new_items)
-            existing_ids.update(it["id"] for it in new_items)
+            ex_ids.update(it["id"] for it in new_items)
             time.sleep(5 + random.uniform(0, 3))
 
         browser.close()
 
     if all_new:
-        merged = all_new + existing  # new items on top
-        save_metadata(merged)
-        print(f"\nSaved {len(all_new)} new items  (total: {len(merged)})")
+        merged = all_new + existing
+        save_meta(merged)
+        print(f"\nSaved: +{len(all_new)} new  (total {len(merged)})")
     else:
-        print("\nNo new items found — metadata unchanged")
+        print("\nNo new items")
 
-    print(f"\nCompleted: {datetime.now(timezone.utc).isoformat()}")
+    print(f"Done: {datetime.now(timezone.utc).isoformat()}")
     return len(all_new)
-
 
 if __name__ == "__main__":
     raise SystemExit(0 if main() >= 0 else 1)

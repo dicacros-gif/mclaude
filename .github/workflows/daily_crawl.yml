@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       debug:
-        description: "Enable debug output"
+        description: "Debug output"
         required: false
         default: "false"
 
@@ -17,7 +17,7 @@ permissions:
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -34,32 +34,29 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Install Playwright browsers
+      - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Run scraper
+      - name: Run scraper (download images & videos)
         env:
           MJ_COOKIES: ${{ secrets.MJ_COOKIES }}
-        run: |
-          echo "=== Scraping Midjourney Explore ==="
-          python scraper.py
+        run: python scraper.py
 
-      - name: Generate gallery HTML
-        run: |
-          echo "=== Generating gallery ==="
-          python generate_gallery.py
-
-      - name: Commit and push if changed
+      - name: Commit and push new media + metadata
         run: |
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Actions"
+
+          # 새로 다운로드된 미디어 파일 + metadata.json 스테이징
           git add data/metadata.json index.html
+          git add media/ 2>/dev/null || true
+
           if git diff --staged --quiet; then
-            echo "No changes to commit."
+            echo "변경 없음 — 커밋 건너뜀"
           else
             TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
-            COUNT=$(python -c "import json; d=json.load(open('data/metadata.json')); print(len(d))")
-            git commit -m "crawl: $TIMESTAMP (total $COUNT items)"
+            COUNT=$(python -c "import json; print(len(json.load(open('data/metadata.json'))))")
+            git commit -m "crawl: $TIMESTAMP  (누적 $COUNT 개)"
             git push
-            echo "Pushed $COUNT total items."
+            echo "✅ Push 완료: 총 $COUNT 개"
           fi
