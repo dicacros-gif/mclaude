@@ -1,0 +1,10 @@
+# 자가 호스팅 러너가 쓰는 브라우저 프로필(로그인 세션) — 절대 커밋 금지
+.mj_profile/
+mj_profile/
+
+# 파이썬 캐시
+__pycache__/
+*.pyc
+
+# 디버그 산출물
+mj_debug.html

@@ -274,24 +274,57 @@ def parse_cookies(raw: str) -> list:
             })
     return cookies
 
-def make_context(pw):
-    browser = pw.chromium.launch(
-        headless=True,
-        args=[
-            "--no-sandbox", "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote",
-            "--disable-blink-features=AutomationControlled",
-        ],
-    )
+LAUNCH_ARGS = [
+    "--no-sandbox", "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote",
+    "--disable-blink-features=AutomationControlled",
+]
+
+def _ua():
     # cf_clearance 쿠키는 User-Agent에 묶이므로, 쿠키를 뽑은 브라우저의 UA를
-    # MJ_UA 시크릿으로 함께 넣어주면 통과 확률이 올라간다.
-    ua = os.environ.get("MJ_UA", "").strip() or (
+    # MJ_UA 환경변수로 맞춰주면 통과 확률이 올라간다.
+    return os.environ.get("MJ_UA", "").strip() or (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/125.0.0.0 Safari/537.36"
     )
+
+def apply_cookies(ctx):
+    raw = os.environ.get("MJ_COOKIES", "").strip()
+    if not raw:
+        log("MJ_COOKIES not set")
+        return
+    cookies = parse_cookies(raw)
+    if cookies:
+        ctx.add_cookies(cookies)
+        names = ", ".join(sorted({c["name"] for c in cookies}))
+        log(f"Loaded {len(cookies)} cookies from MJ_COOKIES ({names})")
+        log(f"  UA: {'custom (MJ_UA)' if os.environ.get('MJ_UA') else 'default'}")
+
+def make_context(pw):
+    headed      = os.environ.get("MJ_HEADED", "") == "1"
+    profile_dir = os.environ.get("MJ_PROFILE_DIR", "").strip()
+
+    # ── 자가 호스팅 모드: 본인 브라우저 프로필(로그인 세션 유지)로 실행 ──
+    if profile_dir:
+        log(f"Persistent profile mode: {profile_dir}  (headed={headed})")
+        ctx = pw.chromium.launch_persistent_context(
+            user_data_dir=profile_dir,
+            headless=not headed,
+            args=LAUNCH_ARGS,
+            user_agent=_ua(),
+            viewport={"width": 1920, "height": 1080},
+            locale="en-US",
+            timezone_id="America/New_York",
+        )
+        ctx.add_init_script(STEALTH_JS)
+        apply_cookies(ctx)
+        return None, ctx   # persistent context는 별도 browser 객체 없음
+
+    # ── 기본(CI) 모드: 임시 컨텍스트 ──
+    browser = pw.chromium.launch(headless=not headed, args=LAUNCH_ARGS)
     ctx = browser.new_context(
-        user_agent=ua,
+        user_agent=_ua(),
         viewport={"width": 1920, "height": 1080},
         locale="en-US",
         timezone_id="America/New_York",
@@ -305,19 +338,7 @@ def make_context(pw):
         },
     )
     ctx.add_init_script(STEALTH_JS)
-
-    # MJ_COOKIES (로그인 세션) 적용 — 인증된 본인 세션으로 접근
-    raw_cookies = os.environ.get("MJ_COOKIES", "").strip()
-    if raw_cookies:
-        cookies = parse_cookies(raw_cookies)
-        if cookies:
-            ctx.add_cookies(cookies)
-            names = ", ".join(sorted({c["name"] for c in cookies}))
-            log(f"Loaded {len(cookies)} cookies from MJ_COOKIES ({names})")
-            log(f"  UA: {'custom (MJ_UA)' if os.environ.get('MJ_UA') else 'default'}")
-    else:
-        log("MJ_COOKIES not set - anonymous crawl (Cloudflare may block)")
-
+    apply_cookies(ctx)
     return browser, ctx
 
 def main() -> int:
@@ -356,7 +377,10 @@ def main() -> int:
             ex_ids.update(it["id"] for it in new_items)
             time.sleep(6 + random.uniform(0, 4))
 
-        browser.close()
+        if browser is not None:
+            browser.close()
+        else:
+            ctx.close()   # persistent context 모드
 
     if all_new:
         merged = dedup(all_new + existing)   # id 기준 최종 중복 제거
