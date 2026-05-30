@@ -258,6 +258,22 @@ def scrape_tab(ctx: BrowserContext, tab: dict, existing_ids: set, today: str) ->
 
 # ── 메인 ──────────────────────────────────────────────────────────────────────
 
+def parse_cookies(raw: str) -> list:
+    """'name=value; name2=value2' 쿠키 문자열 → Playwright 쿠키 목록"""
+    cookies = []
+    for part in raw.split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        name, _, value = part.partition("=")
+        name, value = name.strip(), value.strip()
+        if name:
+            cookies.append({
+                "name": name, "value": value,
+                "domain": ".midjourney.com", "path": "/",
+            })
+    return cookies
+
 def make_context(pw):
     browser = pw.chromium.launch(
         headless=True,
@@ -267,12 +283,15 @@ def make_context(pw):
             "--disable-blink-features=AutomationControlled",
         ],
     )
+    # cf_clearance 쿠키는 User-Agent에 묶이므로, 쿠키를 뽑은 브라우저의 UA를
+    # MJ_UA 시크릿으로 함께 넣어주면 통과 확률이 올라간다.
+    ua = os.environ.get("MJ_UA", "").strip() or (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    )
     ctx = browser.new_context(
-        user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/125.0.0.0 Safari/537.36"
-        ),
+        user_agent=ua,
         viewport={"width": 1920, "height": 1080},
         locale="en-US",
         timezone_id="America/New_York",
@@ -286,6 +305,19 @@ def make_context(pw):
         },
     )
     ctx.add_init_script(STEALTH_JS)
+
+    # MJ_COOKIES (로그인 세션) 적용 — 인증된 본인 세션으로 접근
+    raw_cookies = os.environ.get("MJ_COOKIES", "").strip()
+    if raw_cookies:
+        cookies = parse_cookies(raw_cookies)
+        if cookies:
+            ctx.add_cookies(cookies)
+            names = ", ".join(sorted({c["name"] for c in cookies}))
+            log(f"Loaded {len(cookies)} cookies from MJ_COOKIES ({names})")
+            log(f"  UA: {'custom (MJ_UA)' if os.environ.get('MJ_UA') else 'default'}")
+    else:
+        log("MJ_COOKIES not set - anonymous crawl (Cloudflare may block)")
+
     return browser, ctx
 
 def main() -> int:

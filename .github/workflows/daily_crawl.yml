@@ -33,9 +33,10 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Run scraper
-        # MJ_COOKIES: 선택 - 없어도 3개 탭 모두 크롤링 시도
+        # MJ_COOKIES: 로그인 세션 쿠키(cf_clearance 포함) / MJ_UA: 쿠키를 뽑은 브라우저의 User-Agent
         env:
           MJ_COOKIES: ${{ secrets.MJ_COOKIES }}
+          MJ_UA: ${{ secrets.MJ_UA }}
           PYTHONIOENCODING: utf-8
         run: python scraper.py
 
