@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#0d0d0d">
+
+    <!-- 상단 바 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="8dp"
+        android:background="#161616">
+
+        <TextView
+            android:id="@+id/title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="MJ Gallery"
+            android:textColor="#e0e0e0"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnLogin"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="로그인"
+            android:textSize="12sp"
+            style="?attr/materialButtonOutlinedStyle" />
+
+        <Button
+            android:id="@+id/btnCrawl"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:text="↻ 크롤"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:indeterminate="true"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="6dp"
+        android:textColor="#7c6ff7"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
+    <!-- 크롤링용 WebView (크롤 중에만 보임) -->
+    <WebView
+        android:id="@+id/web"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:visibility="gone" />
+
+    <!-- 갤러리 -->
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/swipe"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/grid"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:padding="3dp"
+            android:clipToPadding="false" />
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+    <TextView
+        android:id="@+id/empty"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:text="불러오는 중…"
+        android:textColor="#5a5a5a"
+        android:visibility="gone" />
+</LinearLayout>
