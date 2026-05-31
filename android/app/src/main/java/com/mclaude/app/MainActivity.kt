@@ -170,7 +170,7 @@ class MainActivity : AppCompatActivity() {
                 if (!crawling) return
                 if (stage == STAGE_CAPTURE) {
                     // 캡쳐 단계: 페이지가 뜨면 스크롤+스크린샷 루프 시작
-                    if (!captureStarted) web.postDelayed({ startCaptureScroll() }, 1500)
+                    if (!captureStarted) web.postDelayed({ startCaptureScroll() }, 2200)
                 } else if (!tabResultReceived) {
                     // CF 챌린지가 리다이렉트 후 실제 페이지를 다시 로드할 수 있으므로
                     // 결과를 받기 전이면 페이지가 끝날 때마다 재주입한다.
@@ -391,8 +391,11 @@ class MainActivity : AppCompatActivity() {
         captureHave = HashSet(captureItems.size)
         captureItems.forEach { captureHave.add(it.jobId) }
         capIndex = 0
-        // 소프트웨어 레이어로 그려야 WebView.draw() 캡쳐가 안정적
-        try { web.setLayerType(View.LAYER_TYPE_SOFTWARE, null) } catch (_: Throwable) {}
+        // API 26+ 는 PixelCopy(실제 합성된 화면 픽셀)로 캡쳐 → 하드웨어 레이어 그대로 둔다.
+        // 그 미만에서만 WebView.draw() 폴백을 쓰므로 소프트웨어 레이어가 필요.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            try { web.setLayerType(View.LAYER_TYPE_SOFTWARE, null) } catch (_: Throwable) {}
+        }
         loadCaptureTab()
     }
 
@@ -433,7 +436,7 @@ class MainActivity : AppCompatActivity() {
         captureStarted = true
         captureStep = 0
         web.evaluateJavascript("window.scrollTo(0,0);", null)
-        handler.postDelayed({ requestCaptureScan() }, 600)
+        handler.postDelayed({ requestCaptureScan() }, 900)
     }
 
     private fun requestCaptureScan() {
@@ -441,17 +444,20 @@ class MainActivity : AppCompatActivity() {
         web.evaluateJavascript(CAPTURE_SCAN_JS, null) // 결과는 JsBridge.onCapture 로
     }
 
-    /** JS가 보고한 화면 내 이미지 위치들을 받아 즉시 스크린샷 → 잘라 저장 */
+    /** JS가 보고한 화면 내 이미지 위치들을 받아 화면을 캡쳐 → 잘라 저장 (PixelCopy 우선, 비동기) */
     private fun handleCaptureScan(json: String) {
         if (!crawling || stage != STAGE_CAPTURE) return
         cancelCaptureWatch()
-        val bmp = captureWebBitmap()
         var atBottom = true
+        var imgTotal = 0
+        var mjTotal = 0
         val ids = ArrayList<String>()
         val rects = ArrayList<IntArray>()
         try {
             val o = JSONObject(json)
             atBottom = o.optBoolean("atBottom", true)
+            imgTotal = o.optInt("imgs")
+            mjTotal = o.optInt("mj")
             val arr = o.optJSONArray("items") ?: JSONArray()
             for (i in 0 until arr.length()) {
                 val it = arr.getJSONObject(i)
@@ -464,45 +470,104 @@ class MainActivity : AppCompatActivity() {
         }
         val today = todayStr()
         val atBottomF = atBottom
-        Thread {
-            var saved = 0
-            if (bmp != null) {
-                for (k in ids.indices) {
-                    if (cropAndSaveCapture(bmp, ids[k], rects[k], capType, today)) saved++
+        val imgF = imgTotal
+        val mjF = mjTotal
+        val myIndex = capIndex
+        armCaptureWatch()                 // 비동기 캡쳐가 멈추면 다음 탭으로 넘어가도록 보호
+        grabBitmap { bmp ->               // UI 스레드 콜백 (PixelCopy → 실패 시 draw 폴백)
+            val capFailed = (bmp == null)
+            Thread {
+                var saved = 0
+                if (bmp != null) {
+                    for (k in ids.indices) {
+                        if (cropAndSaveCapture(bmp, ids[k], rects[k], capType, today)) saved++
+                    }
+                    bmp.recycle()
                 }
-                bmp.recycle()
-            }
-            val s = saved
-            runOnUiThread {
-                captureSavedTotal += s
-                setStatus("화면 캡쳐: ${tabLabel[capType]} · 누적 ${captureSavedTotal}장")
-                captureStep++
-                if (atBottomF || captureStep >= CAPTURE_MAX_STEPS) {
-                    capIndex++
-                    captureStarted = false
-                    loadCaptureTab()
-                } else {
-                    armCaptureWatch()
-                    web.evaluateJavascript(
-                        "window.scrollBy(0, Math.round(window.innerHeight*0.88));", null
-                    )
-                    handler.postDelayed({ requestCaptureScan() }, 600)
+                val s = saved
+                runOnUiThread {
+                    if (!crawling || stage != STAGE_CAPTURE || capIndex != myIndex) return@runOnUiThread
+                    cancelCaptureWatch()
+                    captureSavedTotal += s
+                    val diag = if (capFailed) " · ⚠캡쳐실패(폴백도실패)" else " · img${imgF}/mj${mjF}"
+                    setStatus("화면 캡쳐: ${tabLabel[capType]} · 누적 ${captureSavedTotal}장$diag")
+                    captureStep++
+                    if (atBottomF || captureStep >= CAPTURE_MAX_STEPS) {
+                        capIndex++
+                        captureStarted = false
+                        loadCaptureTab()
+                    } else {
+                        armCaptureWatch()
+                        web.evaluateJavascript(
+                            "window.scrollBy(0, Math.round(window.innerHeight*0.88));", null
+                        )
+                        handler.postDelayed({ requestCaptureScan() }, 900)
+                    }
                 }
-            }
-        }.start()
+            }.start()
+        }
     }
 
-    /** 현재 WebView에 보이는 내용을 비트맵으로 캡쳐 (UI 스레드에서 호출) */
-    private fun captureWebBitmap(): Bitmap? {
+    /**
+     * 현재 화면을 비트맵으로 캡쳐해 onReady(UI 스레드)로 돌려준다.
+     *  1순위: PixelCopy — 실제로 합성된 화면 픽셀을 읽으므로 하드웨어(GPU) 렌더링도 OK.
+     *  실패/구버전(API<26): WebView.draw() 폴백. 둘 다 단색(검은) 화면이면 null.
+     */
+    private fun grabBitmap(onReady: (Bitmap?) -> Unit) {
         val w = web.width
         val h = web.height
-        if (w <= 0 || h <= 0) return null
+        if (w <= 0 || h <= 0) { onReady(null); return }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                val loc = IntArray(2)
+                web.getLocationInWindow(loc)
+                val src = android.graphics.Rect(loc[0], loc[1], loc[0] + w, loc[1] + h)
+                android.view.PixelCopy.request(window, src, bmp, { result ->
+                    if (result == android.view.PixelCopy.SUCCESS && !isBlankBitmap(bmp)) {
+                        onReady(bmp)
+                    } else {
+                        bmp.recycle()
+                        onReady(drawFallbackBitmap(w, h))
+                    }
+                }, handler)
+                return
+            } catch (_: Throwable) {
+                // 아래 폴백으로
+            }
+        }
+        onReady(drawFallbackBitmap(w, h))
+    }
+
+    /** WebView.draw() 폴백 (UI 스레드). 단색이면 null */
+    private fun drawFallbackBitmap(w: Int, h: Int): Bitmap? {
         return try {
             val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             web.draw(Canvas(bmp))
-            bmp
+            if (isBlankBitmap(bmp)) { bmp.recycle(); null } else bmp
         } catch (_: Throwable) {
             null
+        }
+    }
+
+    /** 표본 픽셀이 전부 같은 색이면(검은/단색 화면) 캡쳐 실패로 간주 */
+    private fun isBlankBitmap(bmp: Bitmap): Boolean {
+        return try {
+            val w = bmp.width
+            val h = bmp.height
+            if (w < 4 || h < 4) return true
+            val xs = intArrayOf(w / 6, w / 3, w / 2, 2 * w / 3, 5 * w / 6)
+            val ys = intArrayOf(h / 6, h / 3, h / 2, 2 * h / 3, 5 * h / 6)
+            var first = 0
+            var got = false
+            for (x in xs) for (y in ys) {
+                val p = bmp.getPixel(x, y)
+                if (!got) { first = p; got = true }
+                else if (p != first) return false
+            }
+            true
+        } catch (_: Throwable) {
+            false
         }
     }
 
@@ -570,7 +635,7 @@ class MainActivity : AppCompatActivity() {
         val total = allItems.size
         setStatus(
             if (total == 0)
-                "이미지가 없습니다 — 상단 ‘로그인’ 후 다시 ↻ 크롤 해주세요"
+                "0장 — 상단 ‘로그인’으로 MJ 로그인/CF 통과 후 ↻ 크롤, 또는 옵션에서 ‘화면 캡쳐만’ 선택"
             else
                 "완료 · 총 ${total}장"
         )
@@ -837,10 +902,12 @@ class MainActivity : AppCompatActivity() {
     var UUID = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
     var res = [];
     var imgs = document.querySelectorAll('img');
+    var mj = 0;
     for (var i=0;i<imgs.length;i++){
       var im = imgs[i];
       var s = im.currentSrc || im.src || '';
       if (s.indexOf('midjourney') === -1) continue;
+      mj++;
       var m = s.match(UUID);
       if (!m) continue;
       var r = im.getBoundingClientRect();
@@ -851,9 +918,9 @@ class MainActivity : AppCompatActivity() {
                 w:Math.round(r.width*dpr), h:Math.round(r.height*dpr)});
     }
     var atBottom = (window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 4);
-    AndroidCrawler.onCapture(JSON.stringify({items:res, atBottom:atBottom}));
+    AndroidCrawler.onCapture(JSON.stringify({items:res, atBottom:atBottom, imgs:imgs.length, mj:mj}));
   } catch(e){
-    try { AndroidCrawler.onCapture(JSON.stringify({items:[], atBottom:true})); } catch(e2){}
+    try { AndroidCrawler.onCapture(JSON.stringify({items:[], atBottom:true, imgs:0, mj:0})); } catch(e2){}
   }
 })();
 """
