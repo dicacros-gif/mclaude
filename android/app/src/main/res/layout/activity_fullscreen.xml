@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000"
+    android:clickable="true"
+    android:focusable="true">
+
+    <com.mclaude.app.ZoomImageView
+        android:id="@+id/full"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="image" />
+
+    <TextView
+        android:id="@+id/hint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="14dp"
+        android:background="#80000000"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="4dp"
+        android:text="탭하여 닫기 · 두 번 탭하여 확대"
+        android:textColor="#dddddd"
+        android:textSize="11sp" />
+</FrameLayout>

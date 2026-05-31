@@ -14,7 +14,8 @@ import java.io.File
 class GalleryAdapter(
     private val ctx: Context,
     private val items: MutableList<Item>,
-    private val onDelete: (Item) -> Unit
+    private val onDelete: (Item) -> Unit,
+    private val onOpen: (Item) -> Unit
 ) : RecyclerView.Adapter<GalleryAdapter.VH>() {
 
     class VH(v: View) : RecyclerView.ViewHolder(v) {
@@ -47,6 +48,7 @@ class GalleryAdapter(
             else -> holder.badge.visibility = View.GONE
         }
 
+        holder.img.setOnClickListener { onOpen(item) }
         holder.del.setOnClickListener { onDelete(item) }
     }
 

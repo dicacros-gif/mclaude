@@ -1,6 +1,10 @@
 package com.mclaude.app
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -17,11 +21,14 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.tabs.TabLayout
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -90,7 +97,7 @@ class MainActivity : AppCompatActivity() {
 
         // --- 갤러리 ---
         grid.layoutManager = GridLayoutManager(this, 3)
-        adapter = GalleryAdapter(this, mutableListOf(), ::onDeleteItem)
+        adapter = GalleryAdapter(this, mutableListOf(), ::onDeleteItem, ::onOpenItem)
         grid.adapter = adapter
         allItems = Storage.load(this)
 
@@ -128,8 +135,8 @@ class MainActivity : AppCompatActivity() {
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
         web.settings.mediaPlaybackRequiresUserGesture = true
-        // 추출은 DOM의 src/srcset 속성만 읽으면 되므로 실제 이미지 디코딩은 끔(메모리/멈춤 방지)
-        web.settings.loadsImagesAutomatically = false
+        // 실제 브라우저처럼 이미지를 로드해야 currentSrc/지연로딩 썸네일이 채워져 추출이 안정적이다.
+        web.settings.loadsImagesAutomatically = true
         web.addJavascriptInterface(JsBridge(), "AndroidCrawler")
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -146,6 +153,16 @@ class MainActivity : AppCompatActivity() {
         swipe.setOnRefreshListener {
             swipe.isRefreshing = false
             startCrawl()
+        }
+
+        // Android 9 이하에서는 공용 Pictures 폴더(갤러리) 저장에 쓰기 권한 필요
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 1001
+            )
         }
 
         // 앱 실행 시 자동 크롤 시작
@@ -230,8 +247,19 @@ class MainActivity : AppCompatActivity() {
         if (!crawling || tabResultReceived) return
         val type = siteTabs.getOrNull(tabIndex)?.second ?: "image"
         var count = 0
+        var dbgStr = ""
         try {
-            val arr = JSONArray(json)
+            // 신규 형식 {items:[...], dbg:{...}} 와 구버전 [...] 둘 다 허용
+            val arr: JSONArray
+            if (json.trimStart().startsWith("{")) {
+                val root = JSONObject(json)
+                arr = root.optJSONArray("items") ?: JSONArray()
+                root.optJSONObject("dbg")?.let { d ->
+                    dbgStr = " · a=${d.optInt("a")} img=${d.optInt("img")}"
+                }
+            } else {
+                arr = JSONArray(json)
+            }
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
                 val jobId = o.optString("jobId")
@@ -255,7 +283,7 @@ class MainActivity : AppCompatActivity() {
 
         tabResultReceived = true
         cancelWatchdog()
-        setStatus("크롤링: ${tabLabel[type]} 탭 · 누적 ${collected.size}개")
+        setStatus("크롤링: ${tabLabel[type]} 탭 · 누적 ${collected.size}개$dbgStr")
         tabIndex++
         loadTab()
     }
@@ -285,6 +313,8 @@ class MainActivity : AppCompatActivity() {
                     items.add(Item(jobId, jobId, type, url, link, fname, today))
                     have.add(jobId)
                     added++
+                    // 폰 사진 앱의 'MJGallery' 앨범에도 누적 저장
+                    try { Gallery.save(this, dest, fname, mimeOf(ext)) } catch (_: Exception) {}
                     if (added % 4 == 0) {
                         val a = added
                         runOnUiThread { setStatus("다운로드 중… $a") }
@@ -356,6 +386,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ----------------------------------------------------------------
+    //  사진 탭 → 전체화면(확대) 뷰어
+    // ----------------------------------------------------------------
+    private fun onOpenItem(item: Item) {
+        val f = File(Storage.mediaDir(this), item.file)
+        if (!f.exists()) {
+            Toast.makeText(this, "파일을 찾을 수 없습니다", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val i = Intent(this, FullscreenActivity::class.java)
+        i.putExtra("file", f.absolutePath)
+        startActivity(i)
+    }
+
+    // ----------------------------------------------------------------
     //  유틸
     // ----------------------------------------------------------------
     private fun setStatus(msg: String) {
@@ -382,6 +426,13 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
             "webp"
         }
+    }
+
+    private fun mimeOf(ext: String): String = when (ext.lowercase()) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "gif" -> "image/gif"
+        else -> "image/webp"
     }
 
     private fun download(urlStr: String, dest: File, ua: String?, cookie: String?): Boolean {
@@ -441,8 +492,29 @@ class MainActivity : AppCompatActivity() {
   if (window.__mjCrawling) return;
   window.__mjCrawling = true;
   var lastCount = 0, stable = 0, ticks = 0;
-  var MAX_TICKS = 50, STABLE_NEEDED = 4, ZERO_MAX = 8;
+  var MAX_TICKS = 50, STABLE_NEEDED = 4, ZERO_MAX = 10;
+  var UUID = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
   function abs(u){ try { return new URL(u, location.href).href; } catch(e){ return u; } }
+  function deProxy(u){
+    try {
+      if (u && u.indexOf('/_next/image') !== -1){
+        var q = u.split('?')[1] || '';
+        var ps = q.split('&');
+        for (var k=0;k<ps.length;k++){
+          var kv = ps[k].split('=');
+          if (kv[0] === 'url') return decodeURIComponent(kv[1] || '');
+        }
+      }
+    } catch(e){}
+    return u;
+  }
+  function jobOf(url, link){
+    var mm = (link || '').match(/\/jobs\/([0-9a-fA-F\-]{8,})/);
+    if (mm) return mm[1];
+    mm = (url || '').match(UUID);
+    if (mm) return mm[1];
+    return '';
+  }
   function imgUrl(a){
     var v = a.querySelector('video');
     if (v && v.poster) return abs(v.poster);
@@ -471,22 +543,55 @@ class MainActivity : AppCompatActivity() {
     }
     return '';
   }
+  function pickImg(img){
+    var u = img.currentSrc || img.src || '';
+    if (!u || u.indexOf('data:') === 0){
+      var ss = img.getAttribute('srcset');
+      if (ss){
+        var parts = ss.split(',');
+        var last = parts[parts.length-1].trim().split(' ')[0];
+        if (last) u = abs(last);
+      }
+    }
+    if (!u || u.indexOf('data:') === 0){
+      var ds = img.getAttribute('data-src');
+      if (ds) u = abs(ds);
+    }
+    if (!u || u.indexOf('data:') === 0) return '';
+    return deProxy(abs(u));
+  }
   function collect(){
     var out = [], seen = {};
+    // 1) /jobs/ 링크 우선 (있으면 가장 정확)
     var anchors = document.querySelectorAll('a[href*="/jobs/"]');
     for (var i=0;i<anchors.length;i++){
       var a = anchors[i];
       var href = a.href || '';
-      var m = href.match(/\/jobs\/([0-9a-fA-F\-]{8,})/);
-      if (!m) continue;
-      var jobId = m[1];
+      var url = deProxy(imgUrl(a));
+      var jobId = jobOf(url, href);
+      if (!jobId || !url) continue;
       if (seen[jobId]) continue;
-      var url = imgUrl(a);
-      if (!url) continue;
       seen[jobId] = 1;
       out.push({jobId: jobId, url: url, link: href});
     }
+    // 2) 폴백: midjourney CDN <img> 전부 (그리드/모달 구조와 무관하게 UUID로 식별)
+    var imgs = document.querySelectorAll('img');
+    for (var j=0;j<imgs.length;j++){
+      var u2 = pickImg(imgs[j]);
+      if (!u2 || u2.indexOf('midjourney') === -1) continue;
+      var id2 = jobOf(u2, '');
+      if (!id2 || seen[id2]) continue;
+      seen[id2] = 1;
+      out.push({jobId: id2, url: u2, link: ''});
+    }
     return out;
+  }
+  function dbg(){
+    return {
+      a: document.querySelectorAll('a[href*="/jobs/"]').length,
+      img: document.querySelectorAll('img').length,
+      t: (document.title || '').slice(0, 40)
+    };
   }
   function tick(){
     ticks++;
@@ -499,7 +604,7 @@ class MainActivity : AppCompatActivity() {
                || (items.length === 0 && ticks >= ZERO_MAX);
     if (done){
       window.__mjCrawling = false;
-      try { AndroidCrawler.onResult(JSON.stringify(items)); } catch(e){}
+      try { AndroidCrawler.onResult(JSON.stringify({items: items, dbg: dbg()})); } catch(e){}
       return;
     }
     setTimeout(tick, 700);
