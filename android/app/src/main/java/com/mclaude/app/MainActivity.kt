@@ -7,10 +7,13 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -281,6 +284,119 @@ class MainActivity : AppCompatActivity() {
             if (allItems.any { it.type == t }) {
                 tabsView.getTabAt(idx)?.select()   // 리스너가 currentType/applyFilter 갱신
                 return
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    //  외부 앱/브라우저로 MJ 열기 + 전체화면 캡쳐(MediaProjection)
+    //  이 앱 WebView에서 안 보일 때의 대안: MJ 앱·브라우저에서 보고 화면을 캡쳐
+    // ----------------------------------------------------------------
+    private fun openMjApp() {
+        val url = "https://www.midjourney.com/explore"
+        // 1) MJ 앱 직접 실행 시도(후보 패키지)
+        val pkgs = listOf(
+            "com.midjourney.app", "com.midjourney.Midjourney",
+            "com.midjourney.midjourney", "com.midjourney"
+        )
+        for (p in pkgs) {
+            val li = packageManager.getLaunchIntentForPackage(p)
+            if (li != null) {
+                li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                try { startActivity(li); return } catch (_: Exception) {}
+            }
+        }
+        // 2) midjourney.com 링크 핸들러로 열기 — 앱 링크면 MJ 앱, 아니면 브라우저
+        try {
+            startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Exception) {
+            Toast.makeText(this, "MJ를 열 앱이 없습니다", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openInBrowser() {
+        try {
+            startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("https://www.midjourney.com/explore"))
+                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Exception) {
+            Toast.makeText(this, "브라우저가 없습니다", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** 시스템 화면 캡쳐 권한을 요청 → 허용되면 onActivityResult에서 서비스 시작 */
+    private fun startScreenCapture() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, "android.permission.POST_NOTIFICATIONS")
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this, arrayOf("android.permission.POST_NOTIFICATIONS"), 1002
+            )
+        }
+        val mpm = getSystemService(MediaProjectionManager::class.java)
+        if (mpm == null) {
+            Toast.makeText(this, "이 기기는 화면 캡쳐를 지원하지 않습니다", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            startActivityForResult(mpm.createScreenCaptureIntent(), REQ_PROJECTION)
+        } catch (_: Exception) {
+            Toast.makeText(this, "화면 캡쳐를 시작할 수 없습니다", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun stopScreenCapture() {
+        try {
+            startService(
+                Intent(this, ScreenCaptureService::class.java)
+                    .setAction(ScreenCaptureService.ACTION_STOP)
+            )
+        } catch (_: Exception) {}
+        Toast.makeText(this, "전체화면 캡쳐 중지", Toast.LENGTH_SHORT).show()
+    }
+
+    /** (선택) 떠다니는 캡쳐 버튼을 쓰려면 '다른 앱 위에 표시' 권한 화면을 연다 */
+    private fun openOverlaySettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            } catch (_: Exception) {
+                try { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)) } catch (_: Exception) {}
+            }
+        } else {
+            Toast.makeText(this, "이 버전은 떠다니는 버튼이 항상 가능합니다", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_PROJECTION) {
+            if (resultCode == RESULT_OK && data != null) {
+                val svc = Intent(this, ScreenCaptureService::class.java)
+                    .putExtra(ScreenCaptureService.EXTRA_CODE, resultCode)
+                    .putExtra(ScreenCaptureService.EXTRA_DATA, data)
+                try {
+                    ContextCompat.startForegroundService(this, svc)
+                    Toast.makeText(
+                        this,
+                        "캡쳐 시작됨 · MJ 앱/브라우저를 열고 알림의 ‘📸 캡쳐’로 저장 → ‘🖼 갤러리’ 확인",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } catch (_: Exception) {
+                    Toast.makeText(this, "캡쳐 서비스를 시작하지 못했습니다", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Toast.makeText(this, "화면 캡쳐 권한이 취소되었습니다", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -848,6 +964,7 @@ class MainActivity : AppCompatActivity() {
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             setPadding(0, (8 * d).toInt(), 0, (4 * d).toInt())
         }
+        lateinit var dlg: AlertDialog
 
         // 크롤 방식 (단일 선택)
         root.addView(header("크롤 방식"))
@@ -897,9 +1014,29 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(autoBox)
 
+        // 외부 앱/브라우저로 가져오기 (이 앱 WebView에서 안 보일 때의 대안)
+        root.addView(header("외부 앱/브라우저로 가져오기"))
+        root.addView(TextView(this).apply {
+            text = "이 앱에서 사진이 안 보이면: MJ 앱이나 브라우저로 열어서 보고, " +
+                "‘전체화면 캡쳐’로 그 화면(MJ 앱/브라우저 포함)을 갤러리에 저장하세요."
+            textSize = 12f
+            setTextColor(0xFF999999.toInt())
+            setPadding(0, 0, 0, (6 * d).toInt())
+        })
+        fun actionBtn(label: String, run: () -> Unit) = android.widget.Button(this).apply {
+            text = label
+            isAllCaps = false
+            setOnClickListener { dlg.dismiss(); run() }
+        }
+        root.addView(actionBtn("MJ 앱으로 열기") { openMjApp() })
+        root.addView(actionBtn("브라우저로 열기") { openInBrowser() })
+        root.addView(actionBtn("전체화면 캡쳐 시작 (MJ앱·브라우저도 가능)") { startScreenCapture() })
+        root.addView(actionBtn("전체화면 캡쳐 중지") { stopScreenCapture() })
+        root.addView(actionBtn("(선택) 떠다니는 캡쳐 버튼 권한") { openOverlaySettings() })
+
         val scroll = android.widget.ScrollView(this).apply { addView(root) }
 
-        AlertDialog.Builder(this)
+        dlg = AlertDialog.Builder(this)
             .setTitle("옵션")
             .setView(scroll)
             .setNegativeButton("취소", null)
@@ -915,7 +1052,8 @@ class MainActivity : AppCompatActivity() {
                 saveOptions()
                 Toast.makeText(this, "옵션 저장됨", Toast.LENGTH_SHORT).show()
             }
-            .show()
+            .create()
+        dlg.show()
     }
 
     // ----------------------------------------------------------------
@@ -1056,6 +1194,9 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val ALL = "전체"
+
+        // 화면 캡쳐 권한 요청 코드
+        private const val REQ_PROJECTION = 7001
 
         // 크롤 방식
         private const val METHOD_AUTO = "auto"

@@ -7,6 +7,24 @@
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+    <!-- 전체화면 캡쳐(MediaProjection) — MJ 앱/브라우저 화면도 갤러리에 저장 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 떠다니는 캡쳐 버튼(선택) -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- 외부 앱/브라우저로 MJ 열기 (Android 11+ 패키지 가시성) -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+        <package android:name="com.midjourney.app" />
+        <package android:name="com.midjourney.Midjourney" />
+        <package android:name="com.midjourney.midjourney" />
+        <package android:name="com.midjourney" />
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -31,5 +49,10 @@
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@style/Theme.Mclaude" />
+
+        <service
+            android:name=".ScreenCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
     </application>
 </manifest>
