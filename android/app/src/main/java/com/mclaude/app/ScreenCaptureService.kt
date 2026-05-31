@@ -178,12 +178,13 @@ class ScreenCaptureService : Service() {
             b.recycle()
             if (dest.length() <= 0L) { dest.delete(); return }
             val items = Storage.load(this)
-            items.add(Item(id, id, "image", "", "", fname, today()))
+            // 전체화면 캡쳐는 전용 'capture' 타입 — 앱의 '캡쳐' 탭에 모아 보여준다.
+            items.add(Item(id, id, "capture", "", "", fname, today()))
             Storage.save(this, items)
             try { Gallery.save(this, dest, fname, "image/jpeg") } catch (_: Throwable) {}
             saved++
             ui.post {
-                Toast.makeText(this, "캡쳐 저장 · 총 ${saved}장 · 앱의 ‘🖼 갤러리’에서 확인", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "캡쳐 저장 · 총 ${saved}장 · 앱의 ‘캡쳐’ 탭에서 확인", Toast.LENGTH_SHORT).show()
             }
         } catch (_: Throwable) {
             ui.post { Toast.makeText(this, "저장 실패", Toast.LENGTH_SHORT).show() }

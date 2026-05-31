@@ -62,6 +62,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnCapture: Button
     private lateinit var adapter: GalleryAdapter
 
+    // 다중선택 삭제 액션 바
+    private lateinit var selectionBar: View
+    private lateinit var selCount: TextView
+
     private val handler = Handler(Looper.getMainLooper())
 
     // 저장된 전체 항목(메모리 캐시) + 현재 필터
@@ -106,7 +110,8 @@ class MainActivity : AppCompatActivity() {
         "styles_top" to "style",
         "video_top" to "video"
     )
-    private val tabLabel = mapOf("image" to "이미지", "style" to "스타일", "video" to "비디오")
+    private val tabLabel =
+        mapOf("image" to "이미지", "style" to "스타일", "video" to "비디오", "capture" to "캡쳐")
     private val baseUrl = "https://www.midjourney.com/explore?tab="
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -128,22 +133,31 @@ class MainActivity : AppCompatActivity() {
         btnOptions = findViewById(R.id.btnOptions)
         btnGallery = findViewById(R.id.btnGallery)
         btnCapture = findViewById(R.id.btnCapture)
+        selectionBar = findViewById(R.id.selectionBar)
+        selCount = findViewById(R.id.selCount)
 
         prefs = getSharedPreferences("mj_prefs", MODE_PRIVATE)
         loadOptions()
 
         // --- 갤러리 ---
         grid.layoutManager = GridLayoutManager(this, 3)
-        adapter = GalleryAdapter(this, mutableListOf(), ::onDeleteItem, ::onOpenItem)
+        adapter = GalleryAdapter(this, mutableListOf(), ::onDeleteItem, ::onOpenItem, ::onSelectionChanged)
         grid.adapter = adapter
         allItems = Storage.load(this)
+
+        // 다중선택 액션 바 버튼
+        findViewById<Button>(R.id.selCancel).setOnClickListener { adapter.exitSelection() }
+        findViewById<Button>(R.id.selAll).setOnClickListener { adapter.selectAll() }
+        findViewById<Button>(R.id.selDelete).setOnClickListener { bulkDelete() }
 
         // 카테고리 탭(항상 보임)
         tabsView.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
+                adapter.exitSelection()          // 카테고리 바꾸면 선택 해제
                 currentType = when (tab.position) {
                     1 -> "style"
                     2 -> "video"
+                    3 -> "capture"
                     else -> "image"
                 }
                 applyFilter()
@@ -156,6 +170,7 @@ class MainActivity : AppCompatActivity() {
         dateSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, pos: Int, id: Long) {
                 if (settingSpinner) return
+                adapter.exitSelection()          // 날짜 바꾸면 선택 해제
                 currentDate = dateOptions.getOrElse(pos) { ALL }
                 applyFilter()
             }
@@ -279,7 +294,7 @@ class MainActivity : AppCompatActivity() {
     /** 현재 카테고리 탭이 비어 있고 다른 탭에 항목이 있으면 그 탭을 자동 선택 */
     private fun selectFirstNonEmptyTab() {
         if (allItems.any { it.type == currentType }) return
-        val order = listOf("image" to 0, "style" to 1, "video" to 2)
+        val order = listOf("image" to 0, "style" to 1, "video" to 2, "capture" to 3)
         for ((t, idx) in order) {
             if (allItems.any { it.type == t }) {
                 tabsView.getTabAt(idx)?.select()   // 리스너가 currentType/applyFilter 갱신
@@ -1099,6 +1114,45 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "삭제됨", Toast.LENGTH_SHORT).show()
     }
 
+    /** 어댑터가 선택 모드/선택 개수가 바뀔 때마다 호출 → 액션 바 갱신 */
+    private fun onSelectionChanged(mode: Boolean, count: Int) {
+        selectionBar.visibility = if (mode) View.VISIBLE else View.GONE
+        selCount.text = "${count}개 선택"
+    }
+
+    /** 선택된 여러 장을 한 번에 삭제 (확인 후) */
+    private fun bulkDelete() {
+        val targets = adapter.selectedItems()
+        if (targets.isEmpty()) {
+            Toast.makeText(this, "선택된 항목이 없습니다", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("삭제 확인")
+            .setMessage("${targets.size}장을 삭제할까요? (되돌릴 수 없음)")
+            .setNegativeButton("취소", null)
+            .setPositiveButton("삭제") { _, _ ->
+                val ids = targets.map { it.id }.toHashSet()
+                // 파일 삭제
+                for (t in targets) {
+                    try {
+                        val f = File(Storage.mediaDir(this), t.file)
+                        if (f.exists()) f.delete()
+                    } catch (_: Exception) {}
+                }
+                // metadata 한 번만 저장
+                val items = Storage.load(this)
+                items.removeAll { it.id in ids }
+                Storage.save(this, items)
+                allItems.removeAll { it.id in ids }
+                adapter.exitSelection()
+                rebuildDates()
+                applyFilter()
+                Toast.makeText(this, "${targets.size}장 삭제됨", Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
     // ----------------------------------------------------------------
     //  사진 탭 → 전체화면(확대) 뷰어
     // ----------------------------------------------------------------
@@ -1122,7 +1176,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateEmpty() {
-        empty.text = "‘${tabLabel[currentType]}’ 항목이 없습니다.\n↻ 크롤 버튼을 눌러주세요"
+        empty.text = if (currentType == "capture")
+            "‘캡쳐’ 항목이 없습니다.\n옵션 → ‘전체화면 캡쳐 시작’ 후 MJ 앱/브라우저에서 ‘📸 캡쳐’"
+        else
+            "‘${tabLabel[currentType]}’ 항목이 없습니다.\n↻ 크롤 버튼을 눌러주세요"
         empty.visibility = if (adapter.itemCount == 0 && !crawling) View.VISIBLE else View.GONE
     }
 
@@ -1177,6 +1234,38 @@ class MainActivity : AppCompatActivity() {
         } finally {
             conn?.disconnect()
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // MJ 앱/브라우저에서 '전체화면 캡쳐'로 저장된 새 항목을, 앱으로 돌아오면 자동 반영.
+        // 웹뷰/크롤/선택 모드 중에는 건드리지 않는다(불필요한 새로고침/깜빡임 방지).
+        if (crawling) return
+        if (galleryArea.visibility != View.VISIBLE) return
+        if (::adapter.isInitialized && adapter.selectionMode) return
+        val fresh = Storage.load(this)
+        if (fresh.size != allItems.size) {        // 개수가 달라졌을 때만(새 캡쳐 등) 갱신
+            allItems = fresh
+            rebuildDates()
+            applyFilter()
+            selectFirstNonEmptyTab()
+            setStatus("총 ${allItems.size}장 · 사진을 누르면 확대 · 길게 눌러 여러 장 선택/삭제")
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        // 1) 선택 모드면 먼저 해제
+        if (::adapter.isInitialized && adapter.selectionMode) {
+            adapter.exitSelection()
+            return
+        }
+        // 2) 웹뷰(로그인/탐색) 화면이면 히스토리 뒤로 → 없으면 갤러리로 복귀
+        if (web.visibility == View.VISIBLE && !crawling) {
+            if (web.canGoBack()) web.goBack() else backToGallery()
+            return
+        }
+        super.onBackPressed()
     }
 
     override fun onPause() {

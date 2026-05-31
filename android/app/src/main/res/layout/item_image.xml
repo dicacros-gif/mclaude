@@ -12,6 +12,14 @@
         android:background="#161616"
         android:contentDescription="image" />
 
+    <!-- 선택 모드에서 선택된 항목 위에 깔리는 보라색 반투명 막 -->
+    <View
+        android:id="@+id/selDim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#553C2FB7"
+        android:visibility="gone" />
+
     <TextView
         android:id="@+id/badge"
         android:layout_width="wrap_content"
@@ -36,4 +44,17 @@
         android:text="✕"
         android:textColor="#ffffff"
         android:textSize="14sp" />
+
+    <!-- 선택 모드 체크 표시 (top|start) -->
+    <TextView
+        android:id="@+id/check"
+        android:layout_width="30dp"
+        android:layout_height="30dp"
+        android:layout_gravity="top|start"
+        android:layout_margin="4dp"
+        android:gravity="center"
+        android:text="☐"
+        android:textColor="#ffffff"
+        android:textSize="20sp"
+        android:visibility="gone" />
 </FrameLayout>

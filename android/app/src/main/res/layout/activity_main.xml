@@ -145,6 +145,11 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="비디오" />
+
+                <com.google.android.material.tabs.TabItem
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="캡쳐" />
             </com.google.android.material.tabs.TabLayout>
 
             <Spinner
@@ -155,6 +160,58 @@
                 android:layout_marginEnd="6dp"
                 android:minWidth="112dp"
                 android:popupBackground="#1b1b1b" />
+        </LinearLayout>
+
+        <!-- 선택(다중 삭제) 모드 액션 바 — 길게 눌러 선택 시작하면 나타남 -->
+        <LinearLayout
+            android:id="@+id/selectionBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:padding="6dp"
+            android:background="#231f30"
+            android:visibility="gone">
+
+            <Button
+                android:id="@+id/selCancel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="취소"
+                android:textSize="12sp"
+                android:minWidth="0dp"
+                android:paddingHorizontal="10dp"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <TextView
+                android:id="@+id/selCount"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="0개 선택"
+                android:textColor="#e0e0e0"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/selAll"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="전체선택"
+                android:textSize="12sp"
+                android:minWidth="0dp"
+                android:paddingHorizontal="10dp"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/selDelete"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:text="🗑 삭제"
+                android:textSize="12sp"
+                android:minWidth="0dp"
+                android:paddingHorizontal="10dp" />
         </LinearLayout>
 
         <!-- 그리드 + 빈 상태 (겹쳐서 토글) -->
