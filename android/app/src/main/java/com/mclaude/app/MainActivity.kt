@@ -3,7 +3,10 @@ package com.mclaude.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -20,6 +23,7 @@ import android.widget.ProgressBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -50,6 +54,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnCrawl: Button
     private lateinit var tabsView: TabLayout
     private lateinit var dateSpinner: Spinner
+    private lateinit var btnOptions: Button
     private lateinit var adapter: GalleryAdapter
 
     private val handler = Handler(Looper.getMainLooper())
@@ -68,6 +73,24 @@ class MainActivity : AppCompatActivity() {
     private var emptyRetries = 0
     private var watchdog: Runnable? = null
     private val collected = LinkedHashMap<String, Triple<String, String, String>>() // jobId -> (url, link, type)
+
+    // 옵션(SharedPreferences 저장)
+    private lateinit var prefs: SharedPreferences
+    private var method = METHOD_AUTO                 // auto | direct | capture
+    private var enabledTypes = linkedSetOf("image", "style", "video")
+    private var autoStart = true
+    private var activeTabs: List<Pair<String, String>> = emptyList()
+
+    // 단계/캡쳐 상태
+    private var stage = STAGE_DIRECT
+    private var capIndex = 0
+    private var captureStarted = false
+    private var captureStep = 0
+    private var captureSavedTotal = 0
+    private var capType = "image"
+    private var captureItems: MutableList<Item> = mutableListOf()
+    private var captureHave: HashSet<String> = HashSet()
+    private var captureWatch: Runnable? = null
 
     // 크롤할 사이트 탭: (탭 파라미터, 항목 type)
     private val siteTabs = listOf(
@@ -94,6 +117,10 @@ class MainActivity : AppCompatActivity() {
         btnCrawl = findViewById(R.id.btnCrawl)
         tabsView = findViewById(R.id.tabs)
         dateSpinner = findViewById(R.id.dateSpinner)
+        btnOptions = findViewById(R.id.btnOptions)
+
+        prefs = getSharedPreferences("mj_prefs", MODE_PRIVATE)
+        loadOptions()
 
         // --- 갤러리 ---
         grid.layoutManager = GridLayoutManager(this, 3)
@@ -140,9 +167,13 @@ class MainActivity : AppCompatActivity() {
         web.addJavascriptInterface(JsBridge(), "AndroidCrawler")
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
-                // CF 챌린지가 리다이렉트 후 실제 페이지를 다시 로드할 수 있으므로
-                // 결과를 받기 전이면 페이지가 끝날 때마다 재주입한다.
-                if (crawling && !tabResultReceived) {
+                if (!crawling) return
+                if (stage == STAGE_CAPTURE) {
+                    // 캡쳐 단계: 페이지가 뜨면 스크롤+스크린샷 루프 시작
+                    if (!captureStarted) web.postDelayed({ startCaptureScroll() }, 1500)
+                } else if (!tabResultReceived) {
+                    // CF 챌린지가 리다이렉트 후 실제 페이지를 다시 로드할 수 있으므로
+                    // 결과를 받기 전이면 페이지가 끝날 때마다 재주입한다.
                     web.postDelayed({ injectExtract() }, 1200)
                 }
             }
@@ -150,6 +181,7 @@ class MainActivity : AppCompatActivity() {
 
         btnLogin.setOnClickListener { openLogin() }
         btnCrawl.setOnClickListener { startCrawl() }
+        btnOptions.setOnClickListener { showOptionsDialog() }
         swipe.setOnRefreshListener {
             swipe.isRefreshing = false
             startCrawl()
@@ -165,8 +197,8 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        // 앱 실행 시 자동 크롤 시작
-        handler.postDelayed({ startCrawl() }, 600)
+        // 앱 실행 시 자동 크롤 시작 (옵션에서 끌 수 있음)
+        if (autoStart) handler.postDelayed({ startCrawl() }, 600)
     }
 
     // ----------------------------------------------------------------
@@ -187,21 +219,33 @@ class MainActivity : AppCompatActivity() {
     // ----------------------------------------------------------------
     private fun startCrawl() {
         if (crawling) return
+        loadOptions()
+        activeTabs = siteTabs.filter { it.second in enabledTypes }
+        if (activeTabs.isEmpty()) {
+            Toast.makeText(this, "옵션에서 크롤 대상을 한 개 이상 선택하세요", Toast.LENGTH_SHORT).show()
+            return
+        }
         crawling = true
-        tabIndex = 0
+        captureSavedTotal = 0
         collected.clear()
         progress.visibility = View.VISIBLE
         galleryArea.visibility = View.GONE
         web.visibility = View.VISIBLE
-        loadTab()
+        if (method == METHOD_CAPTURE) {
+            startCaptureStage()             // 화면 캡쳐만
+        } else {
+            stage = STAGE_DIRECT            // auto / direct: 먼저 URL 다운로드
+            tabIndex = 0
+            loadTab()
+        }
     }
 
     private fun loadTab() {
-        if (tabIndex >= siteTabs.size) {
-            finishCrawl()
+        if (tabIndex >= activeTabs.size) {
+            finishDirectStage()
             return
         }
-        val (param, type) = siteTabs[tabIndex]
+        val (param, type) = activeTabs[tabIndex]
         tabResultReceived = false
         emptyRetries = 0
         setStatus("크롤링 중: ${tabLabel[type]} 탭…")
@@ -241,11 +285,16 @@ class MainActivity : AppCompatActivity() {
         fun onResult(json: String) {
             runOnUiThread { handleTabResult(json) }
         }
+
+        @JavascriptInterface
+        fun onCapture(json: String) {
+            runOnUiThread { handleCaptureScan(json) }
+        }
     }
 
     private fun handleTabResult(json: String) {
         if (!crawling || tabResultReceived) return
-        val type = siteTabs.getOrNull(tabIndex)?.second ?: "image"
+        val type = activeTabs.getOrNull(tabIndex)?.second ?: "image"
         var count = 0
         var dbgStr = ""
         try {
@@ -288,10 +337,9 @@ class MainActivity : AppCompatActivity() {
         loadTab()
     }
 
-    private fun finishCrawl() {
+    private fun finishDirectStage() {
         cancelWatchdog()
-        web.visibility = View.GONE
-        setStatus("다운로드 중…")
+        setStatus("URL 다운로드 중…")
         // WebView 접근은 반드시 UI 스레드에서 — 백그라운드로 넘기기 전에 미리 읽어둔다.
         val ua = web.settings.userAgentString
         val cookie = CookieManager.getInstance().getCookie("https://www.midjourney.com")
@@ -322,24 +370,303 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             Storage.save(this, items)
-            val total = items.size
             val newCount = added
             runOnUiThread {
-                crawling = false
                 allItems = items
-                progress.visibility = View.GONE
-                web.visibility = View.GONE
-                galleryArea.visibility = View.VISIBLE
                 rebuildDates()
-                applyFilter()
-                setStatus(
-                    if (total == 0)
-                        "이미지가 없습니다 — 상단 ‘로그인’ 후 다시 ↻ 크롤 해주세요"
-                    else
-                        "완료 · 새로 ${newCount}장 · 총 ${total}장"
-                )
+                setStatus("URL 다운로드 완료 · 새로 ${newCount}장")
+                // 자동 모드면 이어서 화면 캡쳐로 누락분 보충, 아니면 종료
+                if (method == METHOD_AUTO) startCaptureStage() else showResults()
             }
         }.start()
+    }
+
+    // ----------------------------------------------------------------
+    //  화면 캡쳐(스크린샷) 방식 — URL 다운로드가 막히거나 실패할 때의 폴백
+    //  (WebView에 실제 렌더된 화면을 비트맵으로 떠서 썸네일을 잘라 저장)
+    // ----------------------------------------------------------------
+    private fun startCaptureStage() {
+        stage = STAGE_CAPTURE
+        captureItems = Storage.load(this)
+        captureHave = HashSet(captureItems.size)
+        captureItems.forEach { captureHave.add(it.jobId) }
+        capIndex = 0
+        // 소프트웨어 레이어로 그려야 WebView.draw() 캡쳐가 안정적
+        try { web.setLayerType(View.LAYER_TYPE_SOFTWARE, null) } catch (_: Throwable) {}
+        loadCaptureTab()
+    }
+
+    private fun loadCaptureTab() {
+        if (capIndex >= activeTabs.size) {
+            finishCaptureStage()
+            return
+        }
+        val (param, type) = activeTabs[capIndex]
+        capType = type
+        captureStarted = false
+        setStatus("화면 캡쳐 중: ${tabLabel[type]} 탭…")
+        web.loadUrl(baseUrl + param)
+        armCaptureWatch()
+    }
+
+    private fun armCaptureWatch() {
+        cancelCaptureWatch()
+        val myIndex = capIndex
+        val w = Runnable {
+            if (crawling && stage == STAGE_CAPTURE && capIndex == myIndex) {
+                captureStarted = false
+                capIndex++
+                loadCaptureTab()
+            }
+        }
+        captureWatch = w
+        handler.postDelayed(w, 60000)
+    }
+
+    private fun cancelCaptureWatch() {
+        captureWatch?.let { handler.removeCallbacks(it) }
+        captureWatch = null
+    }
+
+    private fun startCaptureScroll() {
+        if (!crawling || stage != STAGE_CAPTURE || captureStarted) return
+        captureStarted = true
+        captureStep = 0
+        web.evaluateJavascript("window.scrollTo(0,0);", null)
+        handler.postDelayed({ requestCaptureScan() }, 600)
+    }
+
+    private fun requestCaptureScan() {
+        if (!crawling || stage != STAGE_CAPTURE) return
+        web.evaluateJavascript(CAPTURE_SCAN_JS, null) // 결과는 JsBridge.onCapture 로
+    }
+
+    /** JS가 보고한 화면 내 이미지 위치들을 받아 즉시 스크린샷 → 잘라 저장 */
+    private fun handleCaptureScan(json: String) {
+        if (!crawling || stage != STAGE_CAPTURE) return
+        cancelCaptureWatch()
+        val bmp = captureWebBitmap()
+        var atBottom = true
+        val ids = ArrayList<String>()
+        val rects = ArrayList<IntArray>()
+        try {
+            val o = JSONObject(json)
+            atBottom = o.optBoolean("atBottom", true)
+            val arr = o.optJSONArray("items") ?: JSONArray()
+            for (i in 0 until arr.length()) {
+                val it = arr.getJSONObject(i)
+                val id = it.optString("id")
+                if (id.isEmpty()) continue
+                ids.add(id)
+                rects.add(intArrayOf(it.optInt("x"), it.optInt("y"), it.optInt("w"), it.optInt("h")))
+            }
+        } catch (_: Exception) {
+        }
+        val today = todayStr()
+        val atBottomF = atBottom
+        Thread {
+            var saved = 0
+            if (bmp != null) {
+                for (k in ids.indices) {
+                    if (cropAndSaveCapture(bmp, ids[k], rects[k], capType, today)) saved++
+                }
+                bmp.recycle()
+            }
+            val s = saved
+            runOnUiThread {
+                captureSavedTotal += s
+                setStatus("화면 캡쳐: ${tabLabel[capType]} · 누적 ${captureSavedTotal}장")
+                captureStep++
+                if (atBottomF || captureStep >= CAPTURE_MAX_STEPS) {
+                    capIndex++
+                    captureStarted = false
+                    loadCaptureTab()
+                } else {
+                    armCaptureWatch()
+                    web.evaluateJavascript(
+                        "window.scrollBy(0, Math.round(window.innerHeight*0.88));", null
+                    )
+                    handler.postDelayed({ requestCaptureScan() }, 600)
+                }
+            }
+        }.start()
+    }
+
+    /** 현재 WebView에 보이는 내용을 비트맵으로 캡쳐 (UI 스레드에서 호출) */
+    private fun captureWebBitmap(): Bitmap? {
+        val w = web.width
+        val h = web.height
+        if (w <= 0 || h <= 0) return null
+        return try {
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            web.draw(Canvas(bmp))
+            bmp
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /** 스크린샷에서 한 이미지 영역을 잘라 jobId.jpg 로 저장(+갤러리). 중복/너무 작은 건 제외 */
+    private fun cropAndSaveCapture(
+        bmp: Bitmap, id: String, rect: IntArray, type: String, today: String
+    ): Boolean {
+        if (captureHave.contains(id)) return false
+        val bw = bmp.width
+        val bh = bmp.height
+        var x = rect[0]; var y = rect[1]; var w = rect[2]; var h = rect[3]
+        if (x < 0) { w += x; x = 0 }
+        if (y < 0) { h += y; y = 0 }
+        if (x >= bw || y >= bh) return false
+        if (x + w > bw) w = bw - x
+        if (y + h > bh) h = bh - y
+        if (w < 40 || h < 40) return false
+        val fname = "$id.jpg"
+        val dest = File(Storage.mediaDir(this), fname)
+        return try {
+            val crop = Bitmap.createBitmap(bmp, x, y, w, h)
+            FileOutputStream(dest).use { crop.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+            crop.recycle()
+            if (dest.length() <= 0L) {
+                dest.delete()
+                false
+            } else {
+                captureItems.add(Item(id, id, type, "", "", fname, today))
+                captureHave.add(id)
+                try { Gallery.save(this, dest, fname, "image/jpeg") } catch (_: Exception) {}
+                true
+            }
+        } catch (_: Throwable) {
+            if (dest.exists()) dest.delete()
+            false
+        }
+    }
+
+    private fun finishCaptureStage() {
+        cancelCaptureWatch()
+        try { web.setLayerType(View.LAYER_TYPE_NONE, null) } catch (_: Throwable) {}
+        val snapshot = captureItems
+        Thread {
+            Storage.save(this, snapshot)
+            runOnUiThread {
+                allItems = snapshot
+                showResults()
+            }
+        }.start()
+    }
+
+    /** 모든 단계 종료 후 갤러리 화면 복귀 */
+    private fun showResults() {
+        crawling = false
+        stage = STAGE_DIRECT
+        captureStarted = false
+        cancelWatchdog()
+        cancelCaptureWatch()
+        try { web.setLayerType(View.LAYER_TYPE_NONE, null) } catch (_: Throwable) {}
+        progress.visibility = View.GONE
+        web.visibility = View.GONE
+        galleryArea.visibility = View.VISIBLE
+        rebuildDates()
+        applyFilter()
+        val total = allItems.size
+        setStatus(
+            if (total == 0)
+                "이미지가 없습니다 — 상단 ‘로그인’ 후 다시 ↻ 크롤 해주세요"
+            else
+                "완료 · 총 ${total}장"
+        )
+    }
+
+    // ----------------------------------------------------------------
+    //  옵션 (방식/대상/자동시작) — SharedPreferences 저장
+    // ----------------------------------------------------------------
+    private fun loadOptions() {
+        method = prefs.getString(KEY_METHOD, METHOD_AUTO) ?: METHOD_AUTO
+        val all = listOf("image", "style", "video")
+        val def = all.toSet()
+        val saved = prefs.getStringSet(KEY_TYPES, def) ?: def
+        val filtered = all.filter { it in saved }
+        enabledTypes = if (filtered.isEmpty()) linkedSetOf("image", "style", "video")
+        else LinkedHashSet(filtered)
+        autoStart = prefs.getBoolean(KEY_AUTOSTART, true)
+    }
+
+    private fun saveOptions() {
+        prefs.edit()
+            .putString(KEY_METHOD, method)
+            .putStringSet(KEY_TYPES, HashSet(enabledTypes))
+            .putBoolean(KEY_AUTOSTART, autoStart)
+            .apply()
+    }
+
+    private fun showOptionsDialog() {
+        val d = resources.displayMetrics.density
+        val pad = (16 * d).toInt()
+        val root = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, pad)
+        }
+        fun header(t: String) = TextView(this).apply {
+            text = t
+            textSize = 14f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, (8 * d).toInt(), 0, (4 * d).toInt())
+        }
+
+        // 크롤 방식 (단일 선택)
+        root.addView(header("크롤 방식"))
+        val methodKeys = arrayOf(METHOD_AUTO, METHOD_DIRECT, METHOD_CAPTURE)
+        val methodLabels = arrayOf(
+            "자동 (URL 다운로드 → 실패 시 화면 캡쳐)",
+            "URL 다운로드만",
+            "화면 캡쳐만 (스크린샷)"
+        )
+        val rg = android.widget.RadioGroup(this)
+        for (i in methodKeys.indices) {
+            rg.addView(android.widget.RadioButton(this).apply {
+                id = i + 1
+                text = methodLabels[i]
+            })
+        }
+        rg.check(methodKeys.indexOf(method).coerceAtLeast(0) + 1)
+        root.addView(rg)
+
+        // 크롤 대상 (다중 선택)
+        root.addView(header("크롤 대상 카테고리"))
+        val typeKeys = arrayOf("image", "style", "video")
+        val typeLabels = arrayOf("이미지", "스타일", "비디오")
+        val boxes = typeKeys.indices.map { i ->
+            android.widget.CheckBox(this).apply {
+                text = typeLabels[i]
+                isChecked = typeKeys[i] in enabledTypes
+            }
+        }
+        boxes.forEach { root.addView(it) }
+
+        // 기타
+        root.addView(header("기타"))
+        val autoBox = android.widget.CheckBox(this).apply {
+            text = "앱 실행 시 자동 크롤 시작"
+            isChecked = autoStart
+        }
+        root.addView(autoBox)
+
+        val scroll = android.widget.ScrollView(this).apply { addView(root) }
+
+        AlertDialog.Builder(this)
+            .setTitle("옵션")
+            .setView(scroll)
+            .setNegativeButton("취소", null)
+            .setPositiveButton("저장") { _, _ ->
+                val mIdx = (rg.checkedRadioButtonId - 1).coerceIn(0, methodKeys.size - 1)
+                method = methodKeys[mIdx]
+                val set = LinkedHashSet<String>()
+                for (i in typeKeys.indices) if (boxes[i].isChecked) set.add(typeKeys[i])
+                enabledTypes = if (set.isEmpty()) linkedSetOf("image", "style", "video") else set
+                autoStart = autoBox.isChecked
+                saveOptions()
+                Toast.makeText(this, "옵션 저장됨", Toast.LENGTH_SHORT).show()
+            }
+            .show()
     }
 
     // ----------------------------------------------------------------
@@ -480,6 +807,56 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val ALL = "전체"
+
+        // 크롤 방식
+        private const val METHOD_AUTO = "auto"
+        private const val METHOD_DIRECT = "direct"
+        private const val METHOD_CAPTURE = "capture"
+
+        // 단계
+        private const val STAGE_DIRECT = 0
+        private const val STAGE_CAPTURE = 1
+
+        // SharedPreferences 키
+        private const val KEY_METHOD = "method"
+        private const val KEY_TYPES = "types"
+        private const val KEY_AUTOSTART = "autostart"
+
+        // 캡쳐: 한 탭에서 최대 스크롤(스크린샷) 횟수
+        private const val CAPTURE_MAX_STEPS = 30
+
+        /**
+         * 현재 화면에 보이는 midjourney <img>들의 화면상 위치(devicePixel)를 모아
+         * AndroidCrawler.onCapture(JSON) 으로 돌려준다. (스크롤은 Kotlin이 제어)
+         */
+        private const val CAPTURE_SCAN_JS = """
+(function(){
+  try {
+    var dpr = window.devicePixelRatio || 1;
+    var H = window.innerHeight;
+    var UUID = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+    var res = [];
+    var imgs = document.querySelectorAll('img');
+    for (var i=0;i<imgs.length;i++){
+      var im = imgs[i];
+      var s = im.currentSrc || im.src || '';
+      if (s.indexOf('midjourney') === -1) continue;
+      var m = s.match(UUID);
+      if (!m) continue;
+      var r = im.getBoundingClientRect();
+      if (r.bottom <= 0 || r.top >= H) continue;
+      if (r.width < 50 || r.height < 50) continue;
+      res.push({id:m[1],
+                x:Math.round(r.left*dpr), y:Math.round(r.top*dpr),
+                w:Math.round(r.width*dpr), h:Math.round(r.height*dpr)});
+    }
+    var atBottom = (window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 4);
+    AndroidCrawler.onCapture(JSON.stringify({items:res, atBottom:atBottom}));
+  } catch(e){
+    try { AndroidCrawler.onCapture(JSON.stringify({items:[], atBottom:true})); } catch(e2){}
+  }
+})();
+"""
 
         /**
          * 페이지를 끝까지 스크롤하며 /jobs/ 링크와 썸네일 URL(속성값)을 모아

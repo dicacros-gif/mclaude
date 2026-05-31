@@ -26,11 +26,24 @@
             android:textStyle="bold" />
 
         <Button
+            android:id="@+id/btnOptions"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="옵션"
+            android:textSize="12sp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="10dp"
+            style="?attr/materialButtonOutlinedStyle" />
+
+        <Button
             android:id="@+id/btnLogin"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
             android:text="로그인"
             android:textSize="12sp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="10dp"
             style="?attr/materialButtonOutlinedStyle" />
 
         <Button
