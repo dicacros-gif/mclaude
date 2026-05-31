@@ -56,10 +56,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnLogin: Button
     private lateinit var btnCrawl: Button
     private lateinit var tabsView: TabLayout
+    private lateinit var webTabs: TabLayout
     private lateinit var dateSpinner: Spinner
     private lateinit var btnOptions: Button
     private lateinit var btnGallery: Button
     private lateinit var btnCapture: Button
+    private lateinit var btnDownload: Button
     private lateinit var adapter: GalleryAdapter
 
     // 다중선택 삭제 액션 바
@@ -92,6 +94,11 @@ class MainActivity : AppCompatActivity() {
     private var scrollCapture = true
     private var activeTabs: List<Pair<String, String>> = emptyList()
 
+    // 탐색(웹뷰) 모드: 현재 화면 이미지 URL 다운로드 / 빈 화면(차단) 감지 상태
+    private var manualDownload = false               // '⬇ 다운' 1회성 URL 다운로드
+    private var blankProbeTries = 0                  // 빈 화면 재확인 횟수
+    private var blankDialogShown = false             // 대안 다이얼로그 중복 방지
+
     // 단계/캡쳐 상태
     private var stage = STAGE_DIRECT
     private var manualCapture = false                // 사용자가 직접 '📸 저장' 누른 1회성 캡쳐
@@ -114,6 +121,11 @@ class MainActivity : AppCompatActivity() {
         mapOf("image" to "이미지", "style" to "스타일", "video" to "비디오", "capture" to "캡쳐")
     private val baseUrl = "https://www.midjourney.com/explore?tab="
 
+    // 탐색(웹뷰) 모드 탭 ↔ 공개 explore URL 파라미터 / 표시 라벨
+    //  0:이미지=top, 1:스타일=styles_top, 2:비디오=video_top
+    private val webTabParams = listOf("top", "styles_top", "video_top")
+    private val webTabLabels = listOf("이미지", "스타일", "비디오")
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -129,10 +141,12 @@ class MainActivity : AppCompatActivity() {
         btnLogin = findViewById(R.id.btnLogin)
         btnCrawl = findViewById(R.id.btnCrawl)
         tabsView = findViewById(R.id.tabs)
+        webTabs = findViewById(R.id.webTabs)
         dateSpinner = findViewById(R.id.dateSpinner)
         btnOptions = findViewById(R.id.btnOptions)
         btnGallery = findViewById(R.id.btnGallery)
         btnCapture = findViewById(R.id.btnCapture)
+        btnDownload = findViewById(R.id.btnDownload)
         selectionBar = findViewById(R.id.selectionBar)
         selCount = findViewById(R.id.selCount)
 
@@ -164,6 +178,17 @@ class MainActivity : AppCompatActivity() {
             }
             override fun onTabUnselected(tab: TabLayout.Tab) {}
             override fun onTabReselected(tab: TabLayout.Tab) {}
+        })
+
+        // 탐색(웹뷰) 모드 탭 — 누르면 해당 공개 explore URL 로드 (이미지/스타일/비디오)
+        webTabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) {
+                if (!crawling) loadExploreTab(tab.position)
+            }
+            override fun onTabUnselected(tab: TabLayout.Tab) {}
+            override fun onTabReselected(tab: TabLayout.Tab) {
+                if (!crawling) loadExploreTab(tab.position)   // 같은 탭 다시 눌러도 재로딩
+            }
         })
 
         // 날짜 드롭다운
@@ -200,16 +225,24 @@ class MainActivity : AppCompatActivity() {
             "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36"
         web.addJavascriptInterface(JsBridge(), "AndroidCrawler")
+        // 일부 사이트는 WebChromeClient(진행률/콘솔/타이틀 콜백)가 있어야 정상 렌더된다.
+        web.webChromeClient = android.webkit.WebChromeClient()
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
-                if (!crawling) return
-                if (stage == STAGE_CAPTURE) {
-                    // 캡쳐 단계: 페이지가 뜨면 스크롤+스크린샷 루프 시작
-                    if (!captureStarted) web.postDelayed({ startCaptureScroll() }, 2200)
-                } else if (!tabResultReceived) {
-                    // CF 챌린지가 리다이렉트 후 실제 페이지를 다시 로드할 수 있으므로
-                    // 결과를 받기 전이면 페이지가 끝날 때마다 재주입한다.
-                    web.postDelayed({ injectExtract() }, 1200)
+                if (crawling) {
+                    if (stage == STAGE_CAPTURE) {
+                        // 캡쳐 단계: 페이지가 뜨면 스크롤+스크린샷 루프 시작
+                        if (!captureStarted) web.postDelayed({ startCaptureScroll() }, 2200)
+                    } else if (!tabResultReceived) {
+                        // CF 챌린지가 리다이렉트 후 실제 페이지를 다시 로드할 수 있으므로
+                        // 결과를 받기 전이면 페이지가 끝날 때마다 재주입한다.
+                        web.postDelayed({ injectExtract() }, 1200)
+                    }
+                    return
+                }
+                // 탐색 모드(수동): 잠시 후 MJ 이미지 수를 세어 빈/차단 화면이면 대안을 제시
+                if (web.visibility == View.VISIBLE) {
+                    web.postDelayed({ probeBlank() }, 2600)
                 }
             }
         }
@@ -218,6 +251,7 @@ class MainActivity : AppCompatActivity() {
         btnCrawl.setOnClickListener { startCrawl() }
         btnOptions.setOnClickListener { showOptionsDialog() }
         btnCapture.setOnClickListener { captureCurrentScreen() }
+        btnDownload.setOnClickListener { downloadCurrentPage() }
         btnGallery.setOnClickListener { backToGallery() }
         swipe.setOnRefreshListener {
             swipe.isRefreshing = false
@@ -238,7 +272,7 @@ class MainActivity : AppCompatActivity() {
         showGalleryMode()
         selectFirstNonEmptyTab()              // 저장분이 다른 카테고리면 그 탭을 자동 선택
         if (allItems.isEmpty())
-            setStatus("저장된 이미지가 없습니다 · ‘🔍 탐색’으로 MJ 접속(로그인 불필요) → 사진이 보이면 ‘📸 저장’, 또는 ↻ 크롤")
+            setStatus("저장된 이미지가 없습니다 · ‘🔍 탐색’ → 탭(이미지/스타일/비디오) 전환 → ‘⬇ 다운’/‘📸 저장’, 또는 ↻ 크롤")
         else
             setStatus("총 ${allItems.size}장 · ↻ 크롤/‘📸 저장’으로 추가 · 사진을 누르면 확대")
         // 자동 크롤은 옵션(기본 꺼짐)일 때만 — 갤러리를 먼저 보여준 뒤 시작
@@ -252,19 +286,41 @@ class MainActivity : AppCompatActivity() {
     private fun openLogin() {
         crawling = false
         manualCapture = false
+        manualDownload = false
         cancelWatchdog()
         cancelCaptureWatch()
         progress.visibility = View.GONE
-        setStatus("로그인 없이 둘러보기 · 사진이 보이면 ‘📸 저장’ · 다 되면 ‘🖼 갤러리’ · 자동은 ↻ 크롤")
+        setStatus("로그인 없이 둘러보기 · 탭으로 전환 · 사진 보이면 ‘⬇ 다운’/‘📸 저장’ · 끝나면 ‘🖼 갤러리’")
         showWebMode()
-        web.loadUrl("https://www.midjourney.com/explore?tab=top")
+        selectWebTab(0)            // 이미지(top) 탭부터
+    }
+
+    /** 탐색 탭을 선택(하이라이트)하고 해당 explore URL을 로드 — 중복 로드 없이 한 번만 */
+    private fun selectWebTab(pos: Int) {
+        if (webTabs.selectedTabPosition == pos) {
+            loadExploreTab(pos)               // 이미 선택된 탭 → 직접 로드(리스너 안 불림)
+        } else {
+            webTabs.getTabAt(pos)?.select()   // 선택 변경 → onTabSelected → loadExploreTab
+        }
+    }
+
+    /** 탭 위치(0:이미지/1:스타일/2:비디오)에 해당하는 공개 explore 페이지를 웹뷰에 로드 */
+    private fun loadExploreTab(pos: Int) {
+        val p = pos.coerceIn(0, webTabParams.size - 1)
+        blankProbeTries = 0
+        blankDialogShown = false
+        manualDownload = false
+        setStatus("불러오는 중: ${webTabLabels[p]} 탭… (로그인 불필요)")
+        web.loadUrl(baseUrl + webTabParams[p])
     }
 
     /** 웹뷰(로그인/탐색) 화면으로 전환 — 상단 버튼을 그 모드에 맞게 토글 */
     private fun showWebMode() {
         galleryArea.visibility = View.GONE
         web.visibility = View.VISIBLE
+        webTabs.visibility = View.VISIBLE
         btnGallery.visibility = View.VISIBLE
+        btnDownload.visibility = View.VISIBLE
         btnCapture.visibility = View.VISIBLE
         btnLogin.visibility = View.GONE
         btnOptions.visibility = View.GONE
@@ -273,8 +329,10 @@ class MainActivity : AppCompatActivity() {
     /** 갤러리(저장된 이미지 보기) 화면으로 전환 — 메인 화면 */
     private fun showGalleryMode() {
         web.visibility = View.GONE
+        webTabs.visibility = View.GONE
         galleryArea.visibility = View.VISIBLE
         btnGallery.visibility = View.GONE
+        btnDownload.visibility = View.GONE
         btnCapture.visibility = View.GONE
         btnLogin.visibility = View.VISIBLE
         btnOptions.visibility = View.VISIBLE
@@ -289,7 +347,7 @@ class MainActivity : AppCompatActivity() {
         applyFilter()
         selectFirstNonEmptyTab()
         setStatus(
-            if (allItems.isEmpty()) "저장된 이미지가 없습니다 · ‘🔍 탐색’(로그인 불필요) 후 사진이 보이면 ‘📸 저장’"
+            if (allItems.isEmpty()) "저장된 이미지가 없습니다 · ‘🔍 탐색’ → 탭 전환 → ‘⬇ 다운’/‘📸 저장’"
             else "총 ${allItems.size}장 · 사진을 누르면 확대"
         )
     }
@@ -432,13 +490,16 @@ class MainActivity : AppCompatActivity() {
         }
         crawling = true
         manualCapture = false
+        manualDownload = false
         captureSavedTotal = 0
         collected.clear()
         progress.visibility = View.VISIBLE
         galleryArea.visibility = View.GONE
         web.visibility = View.VISIBLE
-        // 자동 크롤 중에는 수동 버튼을 숨겨 오작동을 막는다(완료 시 showResults가 복구)
+        // 자동 크롤 중에는 수동 버튼/탐색 탭을 숨겨 오작동을 막는다(완료 시 showResults가 복구)
+        webTabs.visibility = View.GONE
         btnGallery.visibility = View.GONE
+        btnDownload.visibility = View.GONE
         btnCapture.visibility = View.GONE
         btnLogin.visibility = View.GONE
         btnOptions.visibility = View.GONE
@@ -494,7 +555,10 @@ class MainActivity : AppCompatActivity() {
     inner class JsBridge {
         @JavascriptInterface
         fun onResult(json: String) {
-            runOnUiThread { handleTabResult(json) }
+            runOnUiThread {
+                if (manualDownload) handleManualDownload(json)
+                else handleTabResult(json)
+            }
         }
 
         @JavascriptInterface
@@ -503,6 +567,11 @@ class MainActivity : AppCompatActivity() {
                 if (manualCapture) handleManualCapture(json)
                 else handleCaptureScan(json)
             }
+        }
+
+        @JavascriptInterface
+        fun onProbe(json: String) {
+            runOnUiThread { handleProbe(json) }
         }
     }
 
@@ -812,6 +881,159 @@ class MainActivity : AppCompatActivity() {
                 }
             }.start()
         }
+    }
+
+    // ----------------------------------------------------------------
+    //  탐색 모드: '⬇ 다운' — 지금 보고 있는 페이지의 MJ 이미지 URL을 모아
+    //  갤러리 폴더로 직접 다운로드. URL을 못 찾거나 0장이면 화면 캡쳐로 자동 폴백.
+    // ----------------------------------------------------------------
+    private fun downloadCurrentPage() {
+        if (crawling) {
+            Toast.makeText(this, "크롤 진행 중입니다. 끝난 뒤 시도하세요", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (web.visibility != View.VISIBLE) {
+            Toast.makeText(this, "‘🔍 탐색’으로 MJ 화면을 먼저 여세요(로그인 불필요)", Toast.LENGTH_SHORT).show()
+            return
+        }
+        manualDownload = true
+        setStatus("이 화면의 이미지 URL 수집 중…")
+        // EXTRACT_JS: 페이지를 스크롤하며 /jobs/ 링크 + MJ CDN <img> URL 수집 → onResult
+        web.evaluateJavascript(EXTRACT_JS, null)
+    }
+
+    /** '⬇ 다운' 결과 처리 — 수집된 URL들을 갤러리로 다운로드. 0장이면 화면 캡쳐 폴백. */
+    private fun handleManualDownload(json: String) {
+        manualDownload = false
+        val type = inferTypeFromUrl()
+        val snapshot = LinkedHashMap<String, Triple<String, String, String>>()
+        try {
+            val arr: JSONArray = if (json.trimStart().startsWith("{"))
+                JSONObject(json).optJSONArray("items") ?: JSONArray()
+            else JSONArray(json)
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val jobId = o.optString("jobId")
+                val url = o.optString("url")
+                val link = o.optString("link")
+                if (jobId.isEmpty() || url.isEmpty()) continue
+                if (!snapshot.containsKey(jobId)) snapshot[jobId] = Triple(url, link, type)
+            }
+        } catch (_: Exception) {
+        }
+
+        if (snapshot.isEmpty()) {
+            // URL을 전혀 못 찾음(빈/차단 화면) → 화면 캡쳐로 폴백
+            setStatus("이미지 URL을 못 찾음 — 화면 캡쳐로 저장 시도…")
+            captureCurrentScreen()
+            return
+        }
+
+        val ua = web.settings.userAgentString
+        val cookie = CookieManager.getInstance().getCookie("https://www.midjourney.com")
+        val today = todayStr()
+        val list = snapshot.toList()
+        setStatus("다운로드 중… (${list.size}개 후보)")
+        Thread {
+            val items = Storage.load(this)
+            val have = HashSet<String>(items.size)
+            items.forEach { have.add(it.jobId) }
+            var added = 0
+            for ((jobId, triple) in list) {
+                if (jobId in have) continue
+                val (url, link, t) = triple
+                val ext = extOf(url)
+                val fname = "$jobId.$ext"
+                val dest = File(Storage.mediaDir(this), fname)
+                if (download(url, dest, ua, cookie)) {
+                    items.add(Item(jobId, jobId, t, url, link, fname, today))
+                    have.add(jobId)
+                    added++
+                    if (saveToAlbum) try { Gallery.save(this, dest, fname, mimeOf(ext)) } catch (_: Exception) {}
+                    if (added % 4 == 0) {
+                        val a = added
+                        runOnUiThread { setStatus("다운로드 중… $a") }
+                    }
+                }
+            }
+            Storage.save(this, items)
+            val newCount = added
+            runOnUiThread {
+                allItems = items
+                rebuildDates()
+                if (newCount > 0) {
+                    val msg = "이 화면에서 ${newCount}장 다운로드 · 누적 ${allItems.size}장 · ‘🖼 갤러리’로 확인"
+                    setStatus(msg)
+                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+                } else {
+                    // 후보는 있었으나 새로 받은 게 0(중복이거나 차단) → 화면 캡쳐로 보충
+                    setStatus("새 URL 다운로드 0장 — 화면 캡쳐로 보충 시도…")
+                    captureCurrentScreen()
+                }
+            }
+        }.start()
+    }
+
+    // ----------------------------------------------------------------
+    //  빈 화면(차단) 감지 — 탐색 화면에 MJ 이미지가 안 보이면 대안을 제시
+    //  (브라우저로 열기 / 전체화면 캡쳐 / 다시 시도). 자동 진단 메시지 포함.
+    // ----------------------------------------------------------------
+    private fun probeBlank() {
+        if (crawling || web.visibility != View.VISIBLE) return
+        web.evaluateJavascript(PROBE_JS, null)   // → JsBridge.onProbe → handleProbe
+    }
+
+    private fun handleProbe(json: String) {
+        if (crawling || web.visibility != View.VISIBLE) return
+        var mj = 0; var img = 0; var title = ""
+        try {
+            val o = JSONObject(json)
+            mj = o.optInt("mj")
+            img = o.optInt("img")
+            title = o.optString("t")
+        } catch (_: Exception) {
+        }
+        if (mj > 0) {
+            blankProbeTries = 0
+            setStatus("이미지 ${mj}개 표시됨 · ‘⬇ 다운’으로 저장 · ‘📸 저장’으로 화면 저장")
+            return
+        }
+        // MJ 이미지 0 — 지연 로딩/CF 통과 대기일 수 있으니 몇 번 더 기다렸다 재확인
+        if (blankProbeTries < 2) {
+            blankProbeTries++
+            setStatus("불러오는 중… 이미지 대기(${blankProbeTries}/2) · img=$img")
+            web.postDelayed({ probeBlank() }, 3500)
+            return
+        }
+        // 여전히 0 → 빈/차단 화면으로 판단하고 대안 제시(1회)
+        setStatus("⚠ 이 화면에 MJ 이미지가 안 보임 · title='$title' img=$img · 대안 선택")
+        if (!blankDialogShown) {
+            blankDialogShown = true
+            showBlankDialog(title, img)
+        }
+    }
+
+    /** 빈/차단 화면일 때의 대안 — 브라우저로 보기 / 전체화면 캡쳐 / 다시 시도 */
+    private fun showBlankDialog(title: String, img: Int) {
+        if (isFinishing) return
+        AlertDialog.Builder(this)
+            .setTitle("이미지가 안 보여요")
+            .setMessage(
+                "이 앱 화면에서 MJ 이미지가 로드되지 않았어요(차단/지연일 수 있음).\n" +
+                "진단: title='$title', img=$img\n\n" +
+                "아래 방법으로 사진을 가져올 수 있어요:\n" +
+                "• 브라우저로 열기 → 보고 다시 돌아와 ‘⬇ 다운/📸 저장’\n" +
+                "• 전체화면 캡쳐 → MJ 앱·브라우저 화면을 갤러리에 저장\n" +
+                "• 다시 시도 → 이 화면을 새로고침"
+            )
+            .setPositiveButton("브라우저로 열기") { _, _ -> openInBrowser() }
+            .setNeutralButton("전체화면 캡쳐") { _, _ -> startScreenCapture() }
+            .setNegativeButton("다시 시도") { _, _ ->
+                blankProbeTries = 0
+                blankDialogShown = false
+                web.reload()
+            }
+            .show()
     }
 
     /**
@@ -1268,12 +1490,37 @@ class MainActivity : AppCompatActivity() {
             adapter.exitSelection()
             return
         }
-        // 2) 웹뷰(로그인/탐색) 화면이면 히스토리 뒤로 → 없으면 갤러리로 복귀
-        if (web.visibility == View.VISIBLE && !crawling) {
+        // 2) 웹뷰가 보이는 상태면 '뒤로가기'이지 '앱 종료'가 아니다.
+        if (web.visibility == View.VISIBLE) {
+            if (crawling) {
+                // 크롤/캡쳐 진행 중 → 중단하고 갤러리로 (종료 X)
+                cancelCrawl()
+                return
+            }
+            // 탐색 중 → 웹 히스토리 뒤로, 없으면 갤러리로 복귀 (종료 X)
             if (web.canGoBack()) web.goBack() else backToGallery()
             return
         }
         super.onBackPressed()
+    }
+
+    /** 진행 중인 크롤/캡쳐를 중단하고 갤러리로 복귀 (백키/사용자 중단용) */
+    private fun cancelCrawl() {
+        crawling = false
+        manualCapture = false
+        manualDownload = false
+        stage = STAGE_DIRECT
+        captureStarted = false
+        cancelWatchdog()
+        cancelCaptureWatch()
+        progress.visibility = View.GONE
+        try { web.setLayerType(View.LAYER_TYPE_NONE, null) } catch (_: Throwable) {}
+        allItems = Storage.load(this)
+        showGalleryMode()
+        rebuildDates()
+        applyFilter()
+        selectFirstNonEmptyTab()
+        setStatus("크롤 중단됨 · 총 ${allItems.size}장 · 사진을 누르면 확대")
     }
 
     override fun onPause() {
@@ -1345,6 +1592,26 @@ class MainActivity : AppCompatActivity() {
     AndroidCrawler.onCapture(JSON.stringify({items:res, atBottom:atBottom, imgs:imgs.length, mj:mj}));
   } catch(e){
     try { AndroidCrawler.onCapture(JSON.stringify({items:[], atBottom:true, imgs:0, mj:0})); } catch(e2){}
+  }
+})();
+"""
+
+        /**
+         * 빈/차단 화면 감지용: 현재 페이지의 전체 <img> 수, MJ CDN 이미지 수,
+         * 문서 제목을 세어 AndroidCrawler.onProbe(JSON) 으로 돌려준다.
+         */
+        private const val PROBE_JS = """
+(function(){
+  try {
+    var imgs = document.querySelectorAll('img');
+    var mj = 0;
+    for (var i=0;i<imgs.length;i++){
+      var s = imgs[i].currentSrc || imgs[i].src || '';
+      if (s.indexOf('midjourney') !== -1) mj++;
+    }
+    AndroidCrawler.onProbe(JSON.stringify({mj:mj, img:imgs.length, t:(document.title||'').slice(0,60)}));
+  } catch(e){
+    try { AndroidCrawler.onProbe(JSON.stringify({mj:0, img:0, t:''})); } catch(e2){}
   }
 })();
 """

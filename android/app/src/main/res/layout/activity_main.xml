@@ -20,7 +20,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="MJ Gallery"
+            android:text="Mclaude"
             android:textColor="#e0e0e0"
             android:textSize="14sp"
             android:textStyle="bold" />
@@ -36,6 +36,17 @@
             android:paddingHorizontal="10dp"
             android:visibility="gone"
             style="?attr/materialButtonOutlinedStyle" />
+
+        <Button
+            android:id="@+id/btnDownload"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:text="⬇ 다운"
+            android:textSize="12sp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="10dp"
+            android:visibility="gone" />
 
         <Button
             android:id="@+id/btnCapture"
@@ -95,7 +106,36 @@
         android:textSize="12sp"
         android:visibility="gone" />
 
-    <!-- 크롤링용 WebView (크롤/로그인 중에만 보임) -->
+    <!-- 탐색(웹뷰) 모드 탭 — 3개 공개 explore URL 전환 (웹 모드에서만 보임) -->
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/webTabs"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#161616"
+        android:visibility="gone"
+        app:tabMode="fixed"
+        app:tabGravity="fill"
+        app:tabTextColor="#888888"
+        app:tabSelectedTextColor="#ffffff"
+        app:tabIndicatorColor="#7c6ff7">
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="이미지" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="스타일" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="비디오" />
+    </com.google.android.material.tabs.TabLayout>
+
+    <!-- 크롤링/탐색용 WebView (크롤/로그인/탐색 중에만 보임) -->
     <WebView
         android:id="@+id/web"
         android:layout_width="match_parent"
