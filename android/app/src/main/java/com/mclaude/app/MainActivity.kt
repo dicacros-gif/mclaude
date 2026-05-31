@@ -78,7 +78,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: SharedPreferences
     private var method = METHOD_AUTO                 // auto | direct | capture
     private var enabledTypes = linkedSetOf("image", "style", "video")
-    private var autoStart = true
+    private var autoStart = false
+    private var saveToAlbum = true
+    private var scrollCapture = true
     private var activeTabs: List<Pair<String, String>> = emptyList()
 
     // 단계/캡쳐 상태
@@ -197,8 +199,15 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        // 앱 실행 시 자동 크롤 시작 (옵션에서 끌 수 있음)
-        if (autoStart) handler.postDelayed({ startCrawl() }, 600)
+        // 메인 화면은 '갤러리'다 — 앱을 켜면 저장된 이미지부터 보여준다.
+        galleryArea.visibility = View.VISIBLE
+        web.visibility = View.GONE
+        if (allItems.isEmpty())
+            setStatus("저장된 이미지가 없습니다 · 상단 ‘로그인’ 후 ↻ 크롤")
+        else
+            setStatus("총 ${allItems.size}장 · ↻ 크롤로 추가 · 사진을 누르면 확대")
+        // 자동 크롤은 옵션(기본 꺼짐)일 때만 — 갤러리를 먼저 보여준 뒤 시작
+        if (autoStart) handler.postDelayed({ startCrawl() }, 800)
     }
 
     // ----------------------------------------------------------------
@@ -361,8 +370,8 @@ class MainActivity : AppCompatActivity() {
                     items.add(Item(jobId, jobId, type, url, link, fname, today))
                     have.add(jobId)
                     added++
-                    // 폰 사진 앱의 'MJGallery' 앨범에도 누적 저장
-                    try { Gallery.save(this, dest, fname, mimeOf(ext)) } catch (_: Exception) {}
+                    // 폰 사진 앱의 'MJGallery' 앨범에도 누적 저장(옵션)
+                    if (saveToAlbum) try { Gallery.save(this, dest, fname, mimeOf(ext)) } catch (_: Exception) {}
                     if (added % 4 == 0) {
                         val a = added
                         runOnUiThread { setStatus("다운로드 중… $a") }
@@ -492,7 +501,7 @@ class MainActivity : AppCompatActivity() {
                     val diag = if (capFailed) " · ⚠캡쳐실패(폴백도실패)" else " · img${imgF}/mj${mjF}"
                     setStatus("화면 캡쳐: ${tabLabel[capType]} · 누적 ${captureSavedTotal}장$diag")
                     captureStep++
-                    if (atBottomF || captureStep >= CAPTURE_MAX_STEPS) {
+                    if (atBottomF || !scrollCapture || captureStep >= CAPTURE_MAX_STEPS) {
                         capIndex++
                         captureStarted = false
                         loadCaptureTab()
@@ -597,7 +606,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 captureItems.add(Item(id, id, type, "", "", fname, today))
                 captureHave.add(id)
-                try { Gallery.save(this, dest, fname, "image/jpeg") } catch (_: Exception) {}
+                if (saveToAlbum) try { Gallery.save(this, dest, fname, "image/jpeg") } catch (_: Exception) {}
                 true
             }
         } catch (_: Throwable) {
@@ -652,7 +661,9 @@ class MainActivity : AppCompatActivity() {
         val filtered = all.filter { it in saved }
         enabledTypes = if (filtered.isEmpty()) linkedSetOf("image", "style", "video")
         else LinkedHashSet(filtered)
-        autoStart = prefs.getBoolean(KEY_AUTOSTART, true)
+        autoStart = prefs.getBoolean(KEY_AUTOSTART, false)   // 기본 꺼짐: 앱 켜면 갤러리부터 보이게
+        saveToAlbum = prefs.getBoolean(KEY_ALBUM, true)
+        scrollCapture = prefs.getBoolean(KEY_SCROLL, true)
     }
 
     private fun saveOptions() {
@@ -660,6 +671,8 @@ class MainActivity : AppCompatActivity() {
             .putString(KEY_METHOD, method)
             .putStringSet(KEY_TYPES, HashSet(enabledTypes))
             .putBoolean(KEY_AUTOSTART, autoStart)
+            .putBoolean(KEY_ALBUM, saveToAlbum)
+            .putBoolean(KEY_SCROLL, scrollCapture)
             .apply()
     }
 
@@ -707,10 +720,20 @@ class MainActivity : AppCompatActivity() {
         }
         boxes.forEach { root.addView(it) }
 
-        // 기타
-        root.addView(header("기타"))
+        // 저장 · 기타
+        root.addView(header("저장 · 기타"))
+        val albumBox = android.widget.CheckBox(this).apply {
+            text = "폰 갤러리(MJGallery 앨범)에도 저장"
+            isChecked = saveToAlbum
+        }
+        root.addView(albumBox)
+        val scrollBox = android.widget.CheckBox(this).apply {
+            text = "스크롤하며 여러 화면 캡쳐 (끄면 현재 화면만)"
+            isChecked = scrollCapture
+        }
+        root.addView(scrollBox)
         val autoBox = android.widget.CheckBox(this).apply {
-            text = "앱 실행 시 자동 크롤 시작"
+            text = "앱 실행 시 자동 크롤 시작 (기본 꺼짐)"
             isChecked = autoStart
         }
         root.addView(autoBox)
@@ -727,6 +750,8 @@ class MainActivity : AppCompatActivity() {
                 val set = LinkedHashSet<String>()
                 for (i in typeKeys.indices) if (boxes[i].isChecked) set.add(typeKeys[i])
                 enabledTypes = if (set.isEmpty()) linkedSetOf("image", "style", "video") else set
+                saveToAlbum = albumBox.isChecked
+                scrollCapture = scrollBox.isChecked
                 autoStart = autoBox.isChecked
                 saveOptions()
                 Toast.makeText(this, "옵션 저장됨", Toast.LENGTH_SHORT).show()
@@ -886,6 +911,8 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_METHOD = "method"
         private const val KEY_TYPES = "types"
         private const val KEY_AUTOSTART = "autostart"
+        private const val KEY_ALBUM = "save_album"
+        private const val KEY_SCROLL = "scroll_capture"
 
         // 캡쳐: 한 탭에서 최대 스크롤(스크린샷) 횟수
         private const val CAPTURE_MAX_STEPS = 30
