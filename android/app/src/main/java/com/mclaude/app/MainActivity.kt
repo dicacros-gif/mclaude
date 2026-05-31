@@ -94,6 +94,13 @@ class MainActivity : AppCompatActivity() {
     private var scrollCapture = true
     private var activeTabs: List<Pair<String, String>> = emptyList()
 
+    // 런칭(시작) 방식 + 지속 폴백
+    private var launchMode = LAUNCH_GALLERY          // 앱 켤 때 동작 방식
+    private var askOnLaunch = true                   // 켤 때마다 방식 선택 창 띄우기
+    private var persistFallback = true               // 저장 0장이면 다른 방법으로 자동 재시도
+    private var sessionStartCount = 0                // 이번 크롤 시작 시점의 저장 수(증가분 판정)
+    private var crawlAttempt = 0                     // 지속 폴백 재시도 횟수
+
     // 탐색(웹뷰) 모드: 현재 화면 이미지 URL 다운로드 / 빈 화면(차단) 감지 상태
     private var manualDownload = false               // '⬇ 다운' 1회성 URL 다운로드
     private var blankProbeTries = 0                  // 빈 화면 재확인 횟수
@@ -275,8 +282,8 @@ class MainActivity : AppCompatActivity() {
             setStatus("저장된 이미지가 없습니다 · ‘🔍 탐색’ → 탭(이미지/스타일/비디오) 전환 → ‘⬇ 다운’/‘📸 저장’, 또는 ↻ 크롤")
         else
             setStatus("총 ${allItems.size}장 · ↻ 크롤/‘📸 저장’으로 추가 · 사진을 누르면 확대")
-        // 자동 크롤은 옵션(기본 꺼짐)일 때만 — 갤러리를 먼저 보여준 뒤 시작
-        if (autoStart) handler.postDelayed({ startCrawl() }, 800)
+        // 런칭 방식: 켤 때마다 선택 창을 띄우거나(askOnLaunch), 기억해둔 방식으로 자동 시작
+        maybeRunLaunch()
     }
 
     // ----------------------------------------------------------------
@@ -492,6 +499,9 @@ class MainActivity : AppCompatActivity() {
         manualCapture = false
         manualDownload = false
         captureSavedTotal = 0
+        crawlAttempt = 0
+        blankDialogShown = false
+        sessionStartCount = allItems.size           // 증가분(새로 저장된 수) 판정 기준
         collected.clear()
         progress.visibility = View.VISIBLE
         galleryArea.visibility = View.GONE
@@ -664,7 +674,7 @@ class MainActivity : AppCompatActivity() {
                 if (method == METHOD_AUTO || (method == METHOD_DIRECT && newCount == 0))
                     startCaptureStage()
                 else
-                    showResults()
+                    endCrawlOrEscalate()
             }
         }.start()
     }
@@ -1142,9 +1152,141 @@ class MainActivity : AppCompatActivity() {
             Storage.save(this, snapshot)
             runOnUiThread {
                 allItems = snapshot
-                showResults()
+                endCrawlOrEscalate()
             }
         }.start()
+    }
+
+    /**
+     * 한 차례 크롤(URL+캡쳐)이 끝났을 때: 새로 저장된 게 있으면 결과 표시,
+     * 0장이고 '지속 폴백'이 켜져 있으면 다른 방법으로 자동 재시도(화면 캡쳐 → 새로고침),
+     * 그래도 0장이면 외부 방법(탐색/브라우저/전체화면 캡쳐)을 계속 권유한다.
+     */
+    private fun endCrawlOrEscalate() {
+        val gained = allItems.size - sessionStartCount
+        if (gained > 0 || !persistFallback) { showResults(); return }
+        if (crawlAttempt < MAX_CHAIN_ATTEMPTS) {
+            crawlAttempt++
+            collected.clear()
+            captureSavedTotal = 0
+            cancelWatchdog()
+            cancelCaptureWatch()
+            setStatus("아직 0장 — 다른 방법으로 자동 재시도 ${crawlAttempt}/${MAX_CHAIN_ATTEMPTS}…")
+            // URL이 막혔을 가능성이 크므로 재시도는 '화면 캡쳐'로(페이지를 다시 로드해 CF 통과 시도).
+            web.postDelayed({
+                if (!crawling) return@postDelayed
+                stage = STAGE_CAPTURE
+                startCaptureStage()
+            }, 900)
+            return
+        }
+        // 자동 경로(URL+캡쳐)로는 0장 — 외부 방법을 지속적으로 권유
+        showResults()
+        setStatus("자동 수집 0장 — 외부 방법으로 시도하세요(탐색/브라우저/전체화면 캡쳐)")
+        if (!blankDialogShown) {
+            blankDialogShown = true
+            showCrawlFailedDialog()
+        }
+    }
+
+    /** 자동 수집이 0장으로 끝났을 때의 대안(지속 폴백의 마지막 단계) */
+    private fun showCrawlFailedDialog() {
+        if (isFinishing) return
+        AlertDialog.Builder(this)
+            .setTitle("자동 수집 0장")
+            .setMessage(
+                "URL 다운로드와 화면 캡쳐로도 사진을 저장하지 못했어요(차단/지연 가능).\n\n" +
+                "다른 방법으로 시도해 보세요:\n" +
+                "• 탐색 → 탭에서 사진을 직접 보고 ‘⬇ 다운/📸 저장’\n" +
+                "• 브라우저로 열기 → 보고 돌아와 저장\n" +
+                "• 전체화면 캡쳐 → MJ 앱·브라우저 화면을 저장"
+            )
+            .setPositiveButton("탐색 열기") { _, _ -> openLogin() }
+            .setNeutralButton("전체화면 캡쳐") { _, _ -> startScreenCapture() }
+            .setNegativeButton("브라우저로 열기") { _, _ -> openInBrowser() }
+            .show()
+    }
+
+    // ----------------------------------------------------------------
+    //  런칭(시작) 방식 — 앱을 켤 때 동작 방식을 고르고 기억한다.
+    //  (저장이 안 되면 다른 방식을 골라 '되는 것'으로 설정할 수 있게)
+    // ----------------------------------------------------------------
+    private fun maybeRunLaunch() {
+        if (askOnLaunch) {
+            handler.postDelayed({ if (!isFinishing) showLaunchChooser() }, 500)
+        } else {
+            handler.postDelayed({ if (!isFinishing) runLaunchMode(launchMode) }, 600)
+        }
+    }
+
+    private fun showLaunchChooser() {
+        if (isFinishing) return
+        val modes = arrayOf(
+            LAUNCH_GALLERY, LAUNCH_AUTO, LAUNCH_DIRECT,
+            LAUNCH_CAPTURE, LAUNCH_EXPLORE, LAUNCH_PROJECTION
+        )
+        val labels = arrayOf(
+            "갤러리만 보기 (저장된 사진)",
+            "자동 수집 (URL→캡쳐, 추천)",
+            "URL 다운로드만",
+            "화면 캡쳐만 (스크린샷)",
+            "탐색 (탭 보고 ‘⬇ 다운/📸 저장’)",
+            "전체화면 캡쳐 (MJ앱·브라우저)"
+        )
+        val d = resources.displayMetrics.density
+        val pad = (16 * d).toInt()
+        val root = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(pad, (8 * d).toInt(), pad, pad)
+        }
+        val rg = android.widget.RadioGroup(this)
+        for (i in modes.indices) {
+            rg.addView(android.widget.RadioButton(this).apply {
+                id = i + 1
+                text = labels[i]
+            })
+        }
+        rg.check(modes.indexOf(launchMode).coerceAtLeast(0) + 1)
+        root.addView(rg)
+        val rememberBox = android.widget.CheckBox(this).apply {
+            text = "다음부터 묻지 않고 이 방식으로 시작"
+            isChecked = !askOnLaunch
+        }
+        root.addView(rememberBox)
+        val scroll = android.widget.ScrollView(this).apply { addView(root) }
+        AlertDialog.Builder(this)
+            .setTitle("어떤 방식으로 시작할까요?")
+            .setView(scroll)
+            .setNegativeButton("갤러리", null)     // 취소하면 그냥 갤러리
+            .setPositiveButton("시작") { _, _ ->
+                val idx = (rg.checkedRadioButtonId - 1).coerceIn(0, modes.size - 1)
+                launchMode = modes[idx]
+                askOnLaunch = !rememberBox.isChecked
+                saveOptions()
+                runLaunchMode(launchMode)
+            }
+            .show()
+    }
+
+    /** 고른 런칭 방식 실행 */
+    private fun runLaunchMode(mode: String) {
+        when (mode) {
+            LAUNCH_AUTO -> { method = METHOD_AUTO; saveOptions(); startCrawl() }
+            LAUNCH_DIRECT -> { method = METHOD_DIRECT; saveOptions(); startCrawl() }
+            LAUNCH_CAPTURE -> { method = METHOD_CAPTURE; saveOptions(); startCrawl() }
+            LAUNCH_EXPLORE -> openLogin()
+            LAUNCH_PROJECTION -> startScreenCapture()
+            else -> { /* 갤러리만 보기 — 추가 동작 없음 */ }
+        }
+    }
+
+    private fun launchLabel(mode: String): String = when (mode) {
+        LAUNCH_AUTO -> "자동 수집"
+        LAUNCH_DIRECT -> "URL 다운로드만"
+        LAUNCH_CAPTURE -> "화면 캡쳐만"
+        LAUNCH_EXPLORE -> "탐색"
+        LAUNCH_PROJECTION -> "전체화면 캡쳐"
+        else -> "갤러리만 보기"
     }
 
     /** 모든 단계 종료 후 갤러리 화면 복귀 */
@@ -1181,9 +1323,12 @@ class MainActivity : AppCompatActivity() {
         val filtered = all.filter { it in saved }
         enabledTypes = if (filtered.isEmpty()) linkedSetOf("image", "style", "video")
         else LinkedHashSet(filtered)
-        autoStart = prefs.getBoolean(KEY_AUTOSTART, false)   // 기본 꺼짐: 앱 켜면 갤러리부터 보이게
+        autoStart = prefs.getBoolean(KEY_AUTOSTART, false)   // (구버전 호환) 사용 안 함
         saveToAlbum = prefs.getBoolean(KEY_ALBUM, true)
         scrollCapture = prefs.getBoolean(KEY_SCROLL, true)
+        launchMode = prefs.getString(KEY_LAUNCH, LAUNCH_GALLERY) ?: LAUNCH_GALLERY
+        askOnLaunch = prefs.getBoolean(KEY_ASK_LAUNCH, true)   // 기본: 켤 때 방식 선택 창
+        persistFallback = prefs.getBoolean(KEY_PERSIST, true)  // 기본: 0장이면 다른 방법 자동 재시도
     }
 
     private fun saveOptions() {
@@ -1193,6 +1338,9 @@ class MainActivity : AppCompatActivity() {
             .putBoolean(KEY_AUTOSTART, autoStart)
             .putBoolean(KEY_ALBUM, saveToAlbum)
             .putBoolean(KEY_SCROLL, scrollCapture)
+            .putString(KEY_LAUNCH, launchMode)
+            .putBoolean(KEY_ASK_LAUNCH, askOnLaunch)
+            .putBoolean(KEY_PERSIST, persistFallback)
             .apply()
     }
 
@@ -1253,11 +1401,11 @@ class MainActivity : AppCompatActivity() {
             isChecked = scrollCapture
         }
         root.addView(scrollBox)
-        val autoBox = android.widget.CheckBox(this).apply {
-            text = "앱 실행 시 자동 크롤 시작 (기본 꺼짐)"
-            isChecked = autoStart
+        val persistBox = android.widget.CheckBox(this).apply {
+            text = "저장 0장이면 다른 방법으로 자동 재시도 (지속)"
+            isChecked = persistFallback
         }
-        root.addView(autoBox)
+        root.addView(persistBox)
 
         // 외부 앱/브라우저로 가져오기 (이 앱 WebView에서 안 보일 때의 대안)
         root.addView(header("외부 앱/브라우저로 가져오기"))
@@ -1279,6 +1427,17 @@ class MainActivity : AppCompatActivity() {
         root.addView(actionBtn("전체화면 캡쳐 중지") { stopScreenCapture() })
         root.addView(actionBtn("(선택) 떠다니는 캡쳐 버튼 권한") { openOverlaySettings() })
 
+        // 앱 시작 방식(런칭) — 켤 때 동작할 방식을 고르고 기억(되는 방식으로 설정)
+        root.addView(header("앱 시작 방식 (런칭)"))
+        root.addView(TextView(this).apply {
+            text = "앱을 켤 때 어떤 방식으로 시작할지 고릅니다. 현재: ${launchLabel(launchMode)}" +
+                (if (askOnLaunch) " · 켤 때마다 물어봄" else " · 자동 시작")
+            textSize = 12f
+            setTextColor(0xFF999999.toInt())
+            setPadding(0, 0, 0, (6 * d).toInt())
+        })
+        root.addView(actionBtn("시작 방식 선택…") { showLaunchChooser() })
+
         val scroll = android.widget.ScrollView(this).apply { addView(root) }
 
         dlg = AlertDialog.Builder(this)
@@ -1293,7 +1452,7 @@ class MainActivity : AppCompatActivity() {
                 enabledTypes = if (set.isEmpty()) linkedSetOf("image", "style", "video") else set
                 saveToAlbum = albumBox.isChecked
                 scrollCapture = scrollBox.isChecked
-                autoStart = autoBox.isChecked
+                persistFallback = persistBox.isChecked
                 saveOptions()
                 Toast.makeText(this, "옵션 저장됨", Toast.LENGTH_SHORT).show()
             }
@@ -1557,6 +1716,20 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_AUTOSTART = "autostart"
         private const val KEY_ALBUM = "save_album"
         private const val KEY_SCROLL = "scroll_capture"
+        private const val KEY_LAUNCH = "launch_mode"
+        private const val KEY_ASK_LAUNCH = "ask_launch"
+        private const val KEY_PERSIST = "persist_fallback"
+
+        // 런칭(시작) 방식
+        private const val LAUNCH_GALLERY = "gallery"
+        private const val LAUNCH_AUTO = "auto"
+        private const val LAUNCH_DIRECT = "direct"
+        private const val LAUNCH_CAPTURE = "capture"
+        private const val LAUNCH_EXPLORE = "explore"
+        private const val LAUNCH_PROJECTION = "projection"
+
+        // 지속 폴백: 0장일 때 다른 방법으로 자동 재시도 최대 횟수
+        private const val MAX_CHAIN_ATTEMPTS = 2
 
         // 캡쳐: 한 탭에서 최대 스크롤(스크린샷) 횟수
         private const val CAPTURE_MAX_STEPS = 30
