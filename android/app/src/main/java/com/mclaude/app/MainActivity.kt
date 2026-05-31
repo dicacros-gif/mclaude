@@ -589,8 +589,13 @@ class MainActivity : AppCompatActivity() {
                 allItems = items
                 rebuildDates()
                 setStatus("URL 다운로드 완료 · 새로 ${newCount}장")
-                // 자동 모드면 이어서 화면 캡쳐로 누락분 보충, 아니면 종료
-                if (method == METHOD_AUTO) startCaptureStage() else showResults()
+                // 다양한 방법으로 갤러리에 채운다:
+                //  - 자동(AUTO): URL 다운로드 후 항상 화면 캡쳐로 누락분까지 보충
+                //  - URL만(DIRECT): 크롤이 0장이면(차단/구조변경) 화면 캡쳐로 자동 폴백
+                if (method == METHOD_AUTO || (method == METHOD_DIRECT && newCount == 0))
+                    startCaptureStage()
+                else
+                    showResults()
             }
         }.start()
     }
