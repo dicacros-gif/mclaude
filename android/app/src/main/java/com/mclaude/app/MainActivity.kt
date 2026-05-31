@@ -55,6 +55,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tabsView: TabLayout
     private lateinit var dateSpinner: Spinner
     private lateinit var btnOptions: Button
+    private lateinit var btnGallery: Button
+    private lateinit var btnCapture: Button
     private lateinit var adapter: GalleryAdapter
 
     private val handler = Handler(Looper.getMainLooper())
@@ -85,6 +87,7 @@ class MainActivity : AppCompatActivity() {
 
     // 단계/캡쳐 상태
     private var stage = STAGE_DIRECT
+    private var manualCapture = false                // 사용자가 직접 '📸 저장' 누른 1회성 캡쳐
     private var capIndex = 0
     private var captureStarted = false
     private var captureStep = 0
@@ -120,6 +123,8 @@ class MainActivity : AppCompatActivity() {
         tabsView = findViewById(R.id.tabs)
         dateSpinner = findViewById(R.id.dateSpinner)
         btnOptions = findViewById(R.id.btnOptions)
+        btnGallery = findViewById(R.id.btnGallery)
+        btnCapture = findViewById(R.id.btnCapture)
 
         prefs = getSharedPreferences("mj_prefs", MODE_PRIVATE)
         loadOptions()
@@ -163,9 +168,17 @@ class MainActivity : AppCompatActivity() {
         cm.setAcceptThirdPartyCookies(web, true)
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
+        web.settings.databaseEnabled = true
         web.settings.mediaPlaybackRequiresUserGesture = true
         // 실제 브라우저처럼 이미지를 로드해야 currentSrc/지연로딩 썸네일이 채워져 추출이 안정적이다.
         web.settings.loadsImagesAutomatically = true
+        web.settings.useWideViewPort = true
+        web.settings.loadWithOverviewMode = true
+        // 기본 WebView UA는 "wv" 토큰 + 오래된 Chrome 버전이라 MJ가 다른(깨진) 화면을 준다.
+        // 일반 모바일 Chrome UA로 맞춰야 웹사이트/앱과 똑같이 이미지가 렌더된다.
+        web.settings.userAgentString =
+            "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36"
         web.addJavascriptInterface(JsBridge(), "AndroidCrawler")
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -184,6 +197,8 @@ class MainActivity : AppCompatActivity() {
         btnLogin.setOnClickListener { openLogin() }
         btnCrawl.setOnClickListener { startCrawl() }
         btnOptions.setOnClickListener { showOptionsDialog() }
+        btnCapture.setOnClickListener { captureCurrentScreen() }
+        btnGallery.setOnClickListener { backToGallery() }
         swipe.setOnRefreshListener {
             swipe.isRefreshing = false
             startCrawl()
@@ -200,12 +215,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 메인 화면은 '갤러리'다 — 앱을 켜면 저장된 이미지부터 보여준다.
-        galleryArea.visibility = View.VISIBLE
-        web.visibility = View.GONE
+        showGalleryMode()
+        selectFirstNonEmptyTab()              // 저장분이 다른 카테고리면 그 탭을 자동 선택
         if (allItems.isEmpty())
-            setStatus("저장된 이미지가 없습니다 · 상단 ‘로그인’ 후 ↻ 크롤")
+            setStatus("저장된 이미지가 없습니다 · ‘로그인’으로 MJ 접속 → 사진이 보이면 ‘📸 저장’, 또는 ↻ 크롤")
         else
-            setStatus("총 ${allItems.size}장 · ↻ 크롤로 추가 · 사진을 누르면 확대")
+            setStatus("총 ${allItems.size}장 · ↻ 크롤/‘📸 저장’으로 추가 · 사진을 누르면 확대")
         // 자동 크롤은 옵션(기본 꺼짐)일 때만 — 갤러리를 먼저 보여준 뒤 시작
         if (autoStart) handler.postDelayed({ startCrawl() }, 800)
     }
@@ -215,12 +230,59 @@ class MainActivity : AppCompatActivity() {
     // ----------------------------------------------------------------
     private fun openLogin() {
         crawling = false
+        manualCapture = false
         cancelWatchdog()
+        cancelCaptureWatch()
         progress.visibility = View.GONE
-        setStatus("로그인 후 다시 ↻ 크롤 버튼을 눌러주세요")
+        setStatus("로그인/탐색 중 사진이 보이면 ‘📸 저장’ · 다 되면 ‘🖼 갤러리’ · 자동은 ↻ 크롤")
+        showWebMode()
+        web.loadUrl("https://www.midjourney.com/explore?tab=top")
+    }
+
+    /** 웹뷰(로그인/탐색) 화면으로 전환 — 상단 버튼을 그 모드에 맞게 토글 */
+    private fun showWebMode() {
         galleryArea.visibility = View.GONE
         web.visibility = View.VISIBLE
-        web.loadUrl("https://www.midjourney.com/explore?tab=top")
+        btnGallery.visibility = View.VISIBLE
+        btnCapture.visibility = View.VISIBLE
+        btnLogin.visibility = View.GONE
+        btnOptions.visibility = View.GONE
+    }
+
+    /** 갤러리(저장된 이미지 보기) 화면으로 전환 — 메인 화면 */
+    private fun showGalleryMode() {
+        web.visibility = View.GONE
+        galleryArea.visibility = View.VISIBLE
+        btnGallery.visibility = View.GONE
+        btnCapture.visibility = View.GONE
+        btnLogin.visibility = View.VISIBLE
+        btnOptions.visibility = View.VISIBLE
+    }
+
+    /** 웹뷰에서 갤러리로 돌아오기 — 방금 저장한 것까지 새로고침해서 보여준다 */
+    private fun backToGallery() {
+        manualCapture = false
+        allItems = Storage.load(this)
+        showGalleryMode()
+        rebuildDates()
+        applyFilter()
+        selectFirstNonEmptyTab()
+        setStatus(
+            if (allItems.isEmpty()) "저장된 이미지가 없습니다 · ‘로그인’ 후 사진이 보이면 ‘📸 저장’"
+            else "총 ${allItems.size}장 · 사진을 누르면 확대"
+        )
+    }
+
+    /** 현재 카테고리 탭이 비어 있고 다른 탭에 항목이 있으면 그 탭을 자동 선택 */
+    private fun selectFirstNonEmptyTab() {
+        if (allItems.any { it.type == currentType }) return
+        val order = listOf("image" to 0, "style" to 1, "video" to 2)
+        for ((t, idx) in order) {
+            if (allItems.any { it.type == t }) {
+                tabsView.getTabAt(idx)?.select()   // 리스너가 currentType/applyFilter 갱신
+                return
+            }
+        }
     }
 
     // ----------------------------------------------------------------
@@ -235,11 +297,17 @@ class MainActivity : AppCompatActivity() {
             return
         }
         crawling = true
+        manualCapture = false
         captureSavedTotal = 0
         collected.clear()
         progress.visibility = View.VISIBLE
         galleryArea.visibility = View.GONE
         web.visibility = View.VISIBLE
+        // 자동 크롤 중에는 수동 버튼을 숨겨 오작동을 막는다(완료 시 showResults가 복구)
+        btnGallery.visibility = View.GONE
+        btnCapture.visibility = View.GONE
+        btnLogin.visibility = View.GONE
+        btnOptions.visibility = View.GONE
         if (method == METHOD_CAPTURE) {
             startCaptureStage()             // 화면 캡쳐만
         } else {
@@ -297,7 +365,10 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun onCapture(json: String) {
-            runOnUiThread { handleCaptureScan(json) }
+            runOnUiThread {
+                if (manualCapture) handleManualCapture(json)
+                else handleCaptureScan(json)
+            }
         }
     }
 
@@ -517,6 +588,93 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ----------------------------------------------------------------
+    //  수동 캡쳐 — 사용자가 로그인/탐색하다 사진이 보일 때 '📸 저장'을 누르면
+    //  지금 화면에 보이는 MJ 이미지들을 잘라서 1회 저장한다. (가장 확실한 방법)
+    // ----------------------------------------------------------------
+    private fun captureCurrentScreen() {
+        if (crawling) {
+            Toast.makeText(this, "크롤 진행 중입니다. 끝난 뒤 시도하세요", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (web.visibility != View.VISIBLE) {
+            Toast.makeText(this, "‘로그인’으로 MJ 화면을 먼저 여세요", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (web.width <= 0 || web.height <= 0) {
+            Toast.makeText(this, "화면 준비 중… 잠시 후 다시 누르세요", Toast.LENGTH_SHORT).show()
+            return
+        }
+        manualCapture = true
+        capType = inferTypeFromUrl()
+        // 기존 저장분에 누적 + 중복 제외
+        captureItems = Storage.load(this)
+        captureHave = HashSet(captureItems.size)
+        captureItems.forEach { captureHave.add(it.jobId) }
+        setStatus("화면 저장 중…")
+        web.evaluateJavascript(CAPTURE_SCAN_JS, null)   // → JsBridge.onCapture → handleManualCapture
+    }
+
+    /** 현재 보고 있는 URL로 카테고리를 추정 (모르면 image) */
+    private fun inferTypeFromUrl(): String {
+        val u = (web.url ?: "").lowercase()
+        return when {
+            u.contains("video") -> "video"
+            u.contains("style") -> "style"
+            else -> "image"
+        }
+    }
+
+    /** '📸 저장' 1회성 처리 — 화면 캡쳐 → 보이는 이미지 잘라 저장 → 갤러리 갱신 */
+    private fun handleManualCapture(json: String) {
+        var mjTotal = 0
+        val ids = ArrayList<String>()
+        val rects = ArrayList<IntArray>()
+        try {
+            val o = JSONObject(json)
+            mjTotal = o.optInt("mj")
+            val arr = o.optJSONArray("items") ?: JSONArray()
+            for (i in 0 until arr.length()) {
+                val it = arr.getJSONObject(i)
+                val id = it.optString("id")
+                if (id.isEmpty()) continue
+                ids.add(id)
+                rects.add(intArrayOf(it.optInt("x"), it.optInt("y"), it.optInt("w"), it.optInt("h")))
+            }
+        } catch (_: Exception) {
+        }
+        val today = todayStr()
+        val mjF = mjTotal
+        grabBitmap { bmp ->                       // UI 스레드 콜백 (PixelCopy → draw 폴백)
+            val capFailed = (bmp == null)
+            Thread {
+                var saved = 0
+                if (bmp != null) {
+                    for (k in ids.indices) {
+                        if (cropAndSaveCapture(bmp, ids[k], rects[k], capType, today)) saved++
+                    }
+                    bmp.recycle()
+                }
+                Storage.save(this, captureItems)
+                val s = saved
+                runOnUiThread {
+                    manualCapture = false
+                    allItems = captureItems
+                    rebuildDates()
+                    applyFilter()
+                    val msg = when {
+                        capFailed -> "⚠ 화면 캡쳐 실패 — 잠시 후 다시 ‘📸 저장’"
+                        s > 0 -> "이 화면에서 ${s}장 저장 · 누적 ${allItems.size}장 · ‘🖼 갤러리’로 확인"
+                        mjF == 0 -> "화면에 MJ 이미지가 없어요 — 사진이 보이게 스크롤 후 다시 ‘📸 저장’"
+                        else -> "새로 저장할 새 이미지 없음(이미 저장됨) · 감지 ${mjF}개"
+                    }
+                    setStatus(msg)
+                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+                }
+            }.start()
+        }
+    }
+
     /**
      * 현재 화면을 비트맵으로 캡쳐해 onReady(UI 스레드)로 돌려준다.
      *  1순위: PixelCopy — 실제로 합성된 화면 픽셀을 읽으므로 하드웨어(GPU) 렌더링도 OK.
@@ -631,22 +789,23 @@ class MainActivity : AppCompatActivity() {
     /** 모든 단계 종료 후 갤러리 화면 복귀 */
     private fun showResults() {
         crawling = false
+        manualCapture = false
         stage = STAGE_DIRECT
         captureStarted = false
         cancelWatchdog()
         cancelCaptureWatch()
         try { web.setLayerType(View.LAYER_TYPE_NONE, null) } catch (_: Throwable) {}
         progress.visibility = View.GONE
-        web.visibility = View.GONE
-        galleryArea.visibility = View.VISIBLE
+        showGalleryMode()
         rebuildDates()
         applyFilter()
+        selectFirstNonEmptyTab()              // 저장분이 다른 카테고리면 그 탭을 자동 선택
         val total = allItems.size
         setStatus(
             if (total == 0)
-                "0장 — 상단 ‘로그인’으로 MJ 로그인/CF 통과 후 ↻ 크롤, 또는 옵션에서 ‘화면 캡쳐만’ 선택"
+                "0장 — ‘로그인’으로 MJ 접속 후 사진이 보이면 ‘📸 저장’(가장 확실), 또는 ↻ 크롤"
             else
-                "완료 · 총 ${total}장"
+                "완료 · 총 ${total}장 · 사진을 누르면 확대"
         )
     }
 
