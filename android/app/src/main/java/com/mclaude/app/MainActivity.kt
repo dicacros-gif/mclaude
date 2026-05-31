@@ -194,9 +194,11 @@ class MainActivity : AppCompatActivity() {
         web.settings.loadWithOverviewMode = true
         // 기본 WebView UA는 "wv" 토큰 + 오래된 Chrome 버전이라 MJ가 다른(깨진) 화면을 준다.
         // 일반 모바일 Chrome UA로 맞춰야 웹사이트/앱과 똑같이 이미지가 렌더된다.
+        // ※ 버전이 너무 낡으면(예전 Chrome 136) MJ/Cloudflare가 빈/차단 화면을 주므로
+        //   최신 안정판 Chrome으로 맞춘다(미갱신 시 '예전엔 보였는데 안 보임' 증상의 원인).
         web.settings.userAgentString =
-            "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36"
+            "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36"
         web.addJavascriptInterface(JsBridge(), "AndroidCrawler")
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -236,7 +238,7 @@ class MainActivity : AppCompatActivity() {
         showGalleryMode()
         selectFirstNonEmptyTab()              // 저장분이 다른 카테고리면 그 탭을 자동 선택
         if (allItems.isEmpty())
-            setStatus("저장된 이미지가 없습니다 · ‘로그인’으로 MJ 접속 → 사진이 보이면 ‘📸 저장’, 또는 ↻ 크롤")
+            setStatus("저장된 이미지가 없습니다 · ‘🔍 탐색’으로 MJ 접속(로그인 불필요) → 사진이 보이면 ‘📸 저장’, 또는 ↻ 크롤")
         else
             setStatus("총 ${allItems.size}장 · ↻ 크롤/‘📸 저장’으로 추가 · 사진을 누르면 확대")
         // 자동 크롤은 옵션(기본 꺼짐)일 때만 — 갤러리를 먼저 보여준 뒤 시작
@@ -244,7 +246,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ----------------------------------------------------------------
-    //  로그인 (사용자가 직접 MJ 로그인 / CF 통과)
+    //  탐색 — MJ 공개 explore 페이지를 연다. 로그인 없이도 공개 이미지가 보인다.
+    //  (원하면 이 화면에서 직접 로그인도 가능 / CF는 사용자 IP·세션으로 통과)
     // ----------------------------------------------------------------
     private fun openLogin() {
         crawling = false
@@ -252,7 +255,7 @@ class MainActivity : AppCompatActivity() {
         cancelWatchdog()
         cancelCaptureWatch()
         progress.visibility = View.GONE
-        setStatus("로그인/탐색 중 사진이 보이면 ‘📸 저장’ · 다 되면 ‘🖼 갤러리’ · 자동은 ↻ 크롤")
+        setStatus("로그인 없이 둘러보기 · 사진이 보이면 ‘📸 저장’ · 다 되면 ‘🖼 갤러리’ · 자동은 ↻ 크롤")
         showWebMode()
         web.loadUrl("https://www.midjourney.com/explore?tab=top")
     }
@@ -286,7 +289,7 @@ class MainActivity : AppCompatActivity() {
         applyFilter()
         selectFirstNonEmptyTab()
         setStatus(
-            if (allItems.isEmpty()) "저장된 이미지가 없습니다 · ‘로그인’ 후 사진이 보이면 ‘📸 저장’"
+            if (allItems.isEmpty()) "저장된 이미지가 없습니다 · ‘🔍 탐색’(로그인 불필요) 후 사진이 보이면 ‘📸 저장’"
             else "총 ${allItems.size}장 · 사진을 누르면 확대"
         )
     }
@@ -729,7 +732,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (web.visibility != View.VISIBLE) {
-            Toast.makeText(this, "‘로그인’으로 MJ 화면을 먼저 여세요", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "‘🔍 탐색’으로 MJ 화면을 먼저 여세요(로그인 불필요)", Toast.LENGTH_SHORT).show()
             return
         }
         if (web.width <= 0 || web.height <= 0) {
@@ -934,7 +937,7 @@ class MainActivity : AppCompatActivity() {
         val total = allItems.size
         setStatus(
             if (total == 0)
-                "0장 — ‘로그인’으로 MJ 접속 후 사진이 보이면 ‘📸 저장’(가장 확실), 또는 ↻ 크롤"
+                "0장 — ‘🔍 탐색’으로 MJ 접속(로그인 불필요) 후 사진이 보이면 ‘📸 저장’(가장 확실), 또는 ↻ 크롤"
             else
                 "완료 · 총 ${total}장 · 사진을 누르면 확대"
         )
