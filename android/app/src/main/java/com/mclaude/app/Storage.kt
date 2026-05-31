@@ -12,7 +12,8 @@ data class Item(
     val type: String,   // image / style / video
     val url: String,    // 원본 썸네일 URL (다운로드 소스)
     val link: String,   // midjourney job 링크
-    val file: String    // media 폴더 내 로컬 파일명
+    val file: String,   // media 폴더 내 로컬 파일명
+    val date: String = "" // 크롤된 날짜 (yyyy-MM-dd)
 )
 
 /** metadata.json + media/ 파일을 폰 내부 저장소(filesDir)에 관리 */
@@ -38,7 +39,8 @@ object Storage {
                         type = o.optString("type", "image"),
                         url = o.optString("url"),
                         link = o.optString("link"),
-                        file = o.optString("file")
+                        file = o.optString("file"),
+                        date = o.optString("date")
                     )
                 )
             }
@@ -59,6 +61,7 @@ object Storage {
                     .put("url", it.url)
                     .put("link", it.link)
                     .put("file", it.file)
+                    .put("date", it.date)
             )
         }
         metaFile(ctx).writeText(arr.toString())

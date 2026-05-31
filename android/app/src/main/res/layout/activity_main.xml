@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -58,7 +59,7 @@
         android:textSize="12sp"
         android:visibility="gone" />
 
-    <!-- 크롤링용 WebView (크롤 중에만 보임) -->
+    <!-- 크롤링용 WebView (크롤/로그인 중에만 보임) -->
     <WebView
         android:id="@+id/web"
         android:layout_width="match_parent"
@@ -66,28 +67,88 @@
         android:layout_weight="1"
         android:visibility="gone" />
 
-    <!-- 갤러리 -->
-    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-        android:id="@+id/swipe"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1">
-
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/grid"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:padding="3dp"
-            android:clipToPadding="false" />
-    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
-
-    <TextView
-        android:id="@+id/empty"
+    <!-- 갤러리 영역 -->
+    <LinearLayout
+        android:id="@+id/galleryArea"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:gravity="center"
-        android:text="불러오는 중…"
-        android:textColor="#5a5a5a"
-        android:visibility="gone" />
+        android:orientation="vertical">
+
+        <!-- 카테고리 탭(항상 보임) + 날짜 드롭다운 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#161616">
+
+            <com.google.android.material.tabs.TabLayout
+                android:id="@+id/tabs"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="#161616"
+                app:tabMode="fixed"
+                app:tabGravity="fill"
+                app:tabTextColor="#888888"
+                app:tabSelectedTextColor="#ffffff"
+                app:tabIndicatorColor="#7c6ff7">
+
+                <com.google.android.material.tabs.TabItem
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="이미지" />
+
+                <com.google.android.material.tabs.TabItem
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="스타일" />
+
+                <com.google.android.material.tabs.TabItem
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="비디오" />
+            </com.google.android.material.tabs.TabLayout>
+
+            <Spinner
+                android:id="@+id/dateSpinner"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="6dp"
+                android:minWidth="112dp"
+                android:popupBackground="#1b1b1b" />
+        </LinearLayout>
+
+        <!-- 그리드 + 빈 상태 (겹쳐서 토글) -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+                android:id="@+id/swipe"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/grid"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:padding="3dp"
+                    android:clipToPadding="false" />
+            </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+            <TextView
+                android:id="@+id/empty"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:text="아직 이미지가 없습니다.\n↻ 크롤 버튼을 눌러주세요"
+                android:textColor="#5a5a5a"
+                android:textSize="13sp"
+                android:visibility="gone" />
+        </FrameLayout>
+    </LinearLayout>
 </LinearLayout>
